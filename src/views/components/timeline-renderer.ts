@@ -5,6 +5,7 @@
 import { App, TFile, normalizePath } from "obsidian";
 import { TimeEntry, ParsedDay, TemporalDriftSettings } from "../../types";
 import { formatTime, formatDate } from "../../utils/time";
+import { CalendarService, CalendarEvent } from "../../services/calendar";
 
 export interface TimelineRendererOptions {
   onEntryClick?: (entry: TimeEntry, index: number) => void;
@@ -15,6 +16,7 @@ export class TimelineRenderer {
   private app: App;
   private containerEl: HTMLElement;
   private settings: TemporalDriftSettings;
+  private calendarService: CalendarService;
   private options: TimelineRendererOptions;
   private currentData: ParsedDay | null = null;
 
@@ -22,11 +24,13 @@ export class TimelineRenderer {
     app: App,
     containerEl: HTMLElement,
     settings: TemporalDriftSettings,
+    calendarService: CalendarService,
     options: TimelineRendererOptions = {}
   ) {
     this.app = app;
     this.containerEl = containerEl;
     this.settings = settings;
+    this.calendarService = calendarService;
     this.options = options;
   }
 
@@ -158,6 +162,11 @@ export class TimelineRenderer {
     this.containerEl.addClass("temporal-drift-timeline");
 
     const parsed = await this.parseDay(date);
+
+    // Merge calendar events
+    const calendarEvents = await this.fetchCalendarEvents(date);
+    this.mergeCalendarEvents(parsed, calendarEvents);
+
     this.currentData = parsed;
 
     // Header sections (Thankful, Focus)
@@ -328,6 +337,46 @@ export class TimelineRenderer {
    */
   getCurrentData(): ParsedDay | null {
     return this.currentData;
+  }
+
+  /**
+   * Fetch calendar events for a date
+   */
+  private async fetchCalendarEvents(dateStr: string): Promise<CalendarEvent[]> {
+    try {
+      const date = new Date(dateStr);
+      return await this.calendarService.getEventsForDate(date);
+    } catch (e) {
+      console.warn("Temporal Drift: Failed to fetch calendar events", e);
+      return [];
+    }
+  }
+
+  /**
+   * Merge calendar events into parsed day entries
+   */
+  private mergeCalendarEvents(parsed: ParsedDay, events: CalendarEvent[]): void {
+    for (const event of events) {
+      const time = formatTime(event.start);
+
+      // Check if event already exists in entries (by matching time and title)
+      const exists = parsed.entries.some(
+        (e) => e.type === "event" && e.time === time && e.title === event.title
+      );
+
+      if (!exists) {
+        parsed.entries.push({
+          type: "event",
+          time,
+          title: event.title,
+          eventId: event.id,
+          participants: event.participants,
+        });
+      }
+    }
+
+    // Sort entries by time
+    parsed.entries.sort((a, b) => a.time.localeCompare(b.time));
   }
 
   /**

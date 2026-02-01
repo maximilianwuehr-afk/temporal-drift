@@ -6,27 +6,34 @@ import { App, ItemView, WorkspaceLeaf } from "obsidian";
 import { TemporalDriftSettings, SettingsAware, TimeEntry } from "../types";
 import { CalendarStrip } from "./components/calendar-strip";
 import { TimelineRenderer } from "./components/timeline-renderer";
+import { FloatingActionButton } from "./components/fab";
+import { formatTime } from "../utils/time";
 import { formatDate } from "../utils/time";
 import { DailyNoteService } from "../services/daily-note";
+import { CalendarService } from "../services/calendar";
 
 export const VIEW_TYPE_TEMPORAL_DRIFT = "temporal-drift-view";
 
 export class TemporalDriftView extends ItemView implements SettingsAware {
   private settings: TemporalDriftSettings;
   private dailyNoteService: DailyNoteService;
+  private calendarService: CalendarService;
   private calendarStrip: CalendarStrip | null = null;
   private timelineRenderer: TimelineRenderer | null = null;
+  private fab: FloatingActionButton | null = null;
   private selectedDate: Date = new Date();
-  
+
   constructor(
     leaf: WorkspaceLeaf,
     app: App,
     settings: TemporalDriftSettings,
-    dailyNoteService: DailyNoteService
+    dailyNoteService: DailyNoteService,
+    calendarService: CalendarService
   ) {
     super(leaf);
     this.settings = settings;
     this.dailyNoteService = dailyNoteService;
+    this.calendarService = calendarService;
   }
 
   getViewType(): string {
@@ -73,6 +80,7 @@ export class TemporalDriftView extends ItemView implements SettingsAware {
       this.app,
       timelineContainer,
       this.settings,
+      this.calendarService,
       {
         onEntryClick: (entry, index) => this.onEntryClicked(entry, index),
       }
@@ -80,6 +88,14 @@ export class TemporalDriftView extends ItemView implements SettingsAware {
 
     // Render initial timeline
     await this.renderTimeline();
+
+    // Initialize FAB for mobile
+    this.fab = new FloatingActionButton(this.contentEl, {
+      onClick: () => this.quickCapture(),
+      icon: "+",
+      label: "Quick capture",
+    });
+    this.fab.render();
 
     // Listen for file changes
     const handleFileChange = async () => {
@@ -98,6 +114,19 @@ export class TemporalDriftView extends ItemView implements SettingsAware {
     // Cleanup components
     this.calendarStrip?.destroy();
     this.timelineRenderer?.destroy();
+    this.fab?.destroy();
+  }
+
+  /**
+   * Quick capture - add timestamped entry to today's note
+   */
+  private async quickCapture(): Promise<void> {
+    const today = formatDate(new Date());
+    const time = formatTime(new Date());
+
+    // Append entry and open note
+    await this.dailyNoteService.appendEntry(today, time, "");
+    await this.dailyNoteService.openToday();
   }
 
   /**

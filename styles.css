@@ -348,3 +348,276 @@
 .temporal-drift-timeline-container::-webkit-scrollbar-thumb:hover {
   background: var(--background-modifier-border-hover);
 }
+
+/* ============================================================================
+   Task Sidebar
+   ============================================================================ */
+
+.temporal-drift-task-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  padding: var(--size-4-3);
+}
+
+.temporal-drift-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--size-4-3);
+}
+
+.temporal-drift-sidebar-header h3 {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+
+.temporal-drift-count-badge {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent, white);
+  padding: 2px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.temporal-drift-task-section {
+  margin-bottom: var(--size-4-4);
+}
+
+.temporal-drift-task-section .temporal-drift-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--size-4-1) 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: var(--size-4-2);
+}
+
+.temporal-drift-section-title {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.temporal-drift-section-count {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.temporal-drift-task-list {
+  min-height: 40px;
+  transition: background 0.15s ease;
+  border-radius: var(--radius-s);
+}
+
+.temporal-drift-task-list.drag-over {
+  background: var(--background-modifier-hover);
+}
+
+.temporal-drift-empty-section {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-style: italic;
+  padding: var(--size-4-2);
+}
+
+.temporal-drift-task-item {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+  border-radius: var(--radius-s);
+  cursor: grab;
+  transition: all 0.15s ease;
+}
+
+.temporal-drift-task-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.temporal-drift-task-item.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.temporal-drift-task-checkbox {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.temporal-drift-task-item .temporal-drift-task-title {
+  flex: 1;
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+}
+
+.temporal-drift-task-item .temporal-drift-task-title:hover {
+  text-decoration: underline;
+}
+
+.temporal-drift-task-due {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.temporal-drift-drop-placeholder {
+  padding: var(--size-4-2);
+  border: 2px dashed var(--interactive-accent);
+  border-radius: var(--radius-s);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.temporal-drift-add-task-btn {
+  width: 100%;
+  padding: var(--size-4-2);
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  transition: all 0.15s ease;
+}
+
+.temporal-drift-add-task-btn:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+  color: var(--text-normal);
+}
+
+.temporal-drift-loading {
+  padding: var(--size-4-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ============================================================================
+   Floating Action Button (Mobile)
+   ============================================================================ */
+
+.temporal-drift-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent, white);
+  font-size: 24px;
+  font-weight: var(--font-bold);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  z-index: 100;
+}
+
+.temporal-drift-fab:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.temporal-drift-fab:active,
+.temporal-drift-fab.is-pressed {
+  transform: scale(0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.temporal-drift-fab:focus-visible {
+  outline: 2px solid var(--text-on-accent, white);
+  outline-offset: 2px;
+}
+
+.temporal-drift-fab-icon {
+  line-height: 1;
+}
+
+/* Hide FAB on desktop */
+.temporal-drift-fab {
+  display: none;
+}
+
+.is-mobile .temporal-drift-fab {
+  display: flex;
+}
+
+/* ============================================================================
+   Long-press Context Menu
+   ============================================================================ */
+
+.temporal-drift-context-menu {
+  position: fixed;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  min-width: 160px;
+  padding: var(--size-4-1) 0;
+}
+
+.temporal-drift-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-3);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  transition: background 0.1s ease;
+}
+
+.temporal-drift-context-menu-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.temporal-drift-context-menu-item.is-destructive {
+  color: var(--text-error);
+}
+
+.temporal-drift-context-menu-divider {
+  height: 1px;
+  background: var(--background-modifier-border);
+  margin: var(--size-4-1) 0;
+}
+
+/* ============================================================================
+   Mobile Task Sidebar Adjustments
+   ============================================================================ */
+
+.is-mobile .temporal-drift-task-sidebar {
+  padding: var(--size-4-2);
+}
+
+.is-mobile .temporal-drift-task-item {
+  padding: var(--size-4-3);
+  min-height: 44px;
+}
+
+.is-mobile .temporal-drift-task-checkbox {
+  width: 22px;
+  height: 22px;
+}
+
+/* Hide sidebar on very small screens */
+@media (max-width: 480px) {
+  .temporal-drift-task-section {
+    margin-bottom: var(--size-4-2);
+  }
+}

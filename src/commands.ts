@@ -92,4 +92,26 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
       });
     },
   });
+
+  // Open task sidebar
+  plugin.addCommand({
+    id: "open-task-sidebar",
+    name: "Open task sidebar",
+    callback: async () => {
+      await plugin.activateTaskSidebar();
+    },
+  });
+
+  // Create new task
+  plugin.addCommand({
+    id: "create-task",
+    name: "Create task",
+    callback: async () => {
+      const title = prompt("Task name:");
+      if (title) {
+        const file = await plugin.getTaskIndexService().createTask(title);
+        await plugin.app.workspace.getLeaf(false).openFile(file);
+      }
+    },
+  });
 }
