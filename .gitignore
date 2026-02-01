@@ -1,0 +1,22 @@
+# Build output
+main.js
+*.map
+
+# Dependencies
+node_modules/
+
+# IDE
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# System
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
