@@ -651,7 +651,7 @@
   --text-primary: #1A1A1A;
   --text-secondary: #6B6B6B;
   --text-tertiary: #9B9B9B;
-  --accent: #C45D3A;
+  --accent: #6B6B6B;
   --accent-subtle: rgba(196, 93, 58, 0.06);
   --accent-light: rgba(196, 93, 58, 0.03);
   --border: #E5E3DF;
@@ -722,14 +722,14 @@
 .temporal-drift-view.td-prototype .hour-time {
   font-size: 11px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--td-time-color);
   padding-top: calc(var(--u) * 2);
   text-align: right;
   padding-right: calc(var(--u) * 2);
   font-variant-numeric: tabular-nums;
 }
 
-.temporal-drift-view.td-prototype .hour.now .hour-time { color: var(--accent); }
+.temporal-drift-view.td-prototype .hour.now .hour-time { color: var(--td-current-accent); }
 
 .temporal-drift-view.td-prototype .hour-slot {
   border-left: 1px solid var(--border-light);
@@ -744,7 +744,7 @@
   top: 18px;
   width: 7px;
   height: 7px;
-  background: var(--accent);
+  background: var(--td-current-accent);
   border-radius: 50%;
 }
 
@@ -864,19 +864,38 @@
 }
 
 /* ============================================================================
+   Time palette (design update)
+   ============================================================================ */
+
+:root {
+  /* Timestamps - grey contrast */
+  --td-time-color: #6B6B6B;
+  --td-current-accent: #6B6B6B;
+}
+
+.theme-dark {
+  --td-time-color: #9B9B9B;
+  --td-current-accent: #9B9B9B;
+}
+
+/* ============================================================================
    CM6 editor decorations (raw editor mode)
    ============================================================================ */
 
 .cm-content .td-timestamp {
-  font-family: var(--font, 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
-  font-weight: 600;
-  color: #C45D3A;
+  font-family: var(--font-text);
+  font-weight: 500;
+  color: var(--td-time-color);
   font-variant-numeric: tabular-nums;
 }
 
 .cm-content .td-current-block {
-  background: rgba(196, 93, 58, 0.03);
-  border-left: 2px solid #C45D3A;
+  border-left: 2px solid var(--td-current-accent);
   padding-left: 0.5em;
   margin-left: -0.6em;
+  background: rgba(107, 107, 107, 0.03);
+}
+
+.theme-dark .cm-content .td-current-block {
+  background: rgba(155, 155, 155, 0.06);
 }
