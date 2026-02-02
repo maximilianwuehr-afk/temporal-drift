@@ -13,6 +13,7 @@ import { AutoTimestampExtension } from "./editor/auto-timestamp";
 import { registerCommands } from "./commands";
 import { formatDate, formatTime } from "./utils/time";
 import { TemporalDriftView, VIEW_TYPE_TEMPORAL_DRIFT } from "./views/TemporalDriftView";
+import { registerTimelinePostProcessor } from "./preview/timeline-postprocessor";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
@@ -38,8 +39,11 @@ export default class TemporalDriftPlugin extends Plugin {
     // Register CM6 extensions (raw editor mode)
     this.registerEditorExtension(this.buildEditorExtensions());
 
-    // Register Temporal Drift custom view (main experience)
+    // Register Temporal Drift custom view (legacy)
     this.registerView(VIEW_TYPE_TEMPORAL_DRIFT, (leaf) => new TemporalDriftView(leaf, this));
+
+    // Reading view (Preview) renderer for timeline cards
+    registerTimelinePostProcessor(this);
 
     // Register settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
