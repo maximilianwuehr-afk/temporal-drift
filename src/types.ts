@@ -45,7 +45,7 @@ export interface SettingsAware {
 export type TimeEntry =
   | { type: "task"; time: string; content: string; status: "open" | "done"; taskPath?: string }
   | { type: "note"; time: string; content: string }
-  | { type: "event"; time: string; title: string; eventId: string; participants?: string[] };
+  | { type: "event"; time: string; title: string; eventId: string; participants?: Participant[] };
 
 export interface ParsedDay {
   date: string;
@@ -73,12 +73,17 @@ export interface TaskMeta {
 // Calendar Types
 // ============================================================================
 
+export interface Participant {
+  name: string;
+  email: string;
+}
+
 export interface CalendarEvent {
   id: string;
   title: string;
   start: Date;
   end: Date;
-  participants: string[];
+  participants: Participant[];
   description?: string;
   location?: string;
 }

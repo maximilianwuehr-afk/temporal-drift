@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { App, TFile, normalizePath } from "obsidian";
-import { TimeEntry, ParsedDay, TemporalDriftSettings } from "../../types";
+import { TimeEntry, ParsedDay, TemporalDriftSettings, Participant } from "../../types";
 import { formatTime, formatDate } from "../../utils/time";
 import { CalendarService, CalendarEvent } from "../../services/calendar";
 
@@ -79,7 +79,7 @@ export class TimelineRenderer {
       const line = lines[i];
 
       // Check for section headers
-      if (line.match(/^##\s*Thankful/i)) {
+      if (line.match(/^##\s*(Thankful|Grateful)/i)) {
         inThankful = true;
         inFocus = false;
         continue;
@@ -169,9 +169,9 @@ export class TimelineRenderer {
 
     this.currentData = parsed;
 
-    // Header sections (Thankful, Focus)
+    // Header sections (Grateful, Focus)
     if (this.settings.showThankful && parsed.thankful) {
-      this.renderSection("Thankful for", parsed.thankful);
+      this.renderSection("Grateful for", parsed.thankful);
     }
 
     if (this.settings.showFocus && parsed.focus) {
@@ -327,9 +327,69 @@ export class TimelineRenderer {
     link.setText(entry.title);
 
     if (entry.participants && entry.participants.length > 0) {
-      const participants = container.createSpan({ cls: "temporal-drift-participants" });
-      participants.setText(` with ${entry.participants.join(", ")}`);
+      const participantsEl = container.createSpan({ cls: "temporal-drift-participants" });
+      participantsEl.appendText(" with ");
+
+      entry.participants.forEach((participant, index) => {
+        if (index > 0) {
+          participantsEl.appendText(", ");
+        }
+
+        const participantLink = participantsEl.createEl("a", {
+          cls: "temporal-drift-participant-link",
+          attr: { href: "#" },
+        });
+        participantLink.setText(participant.name);
+
+        participantLink.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await this.openPersonNote(participant);
+        });
+      });
     }
+  }
+
+  /**
+   * Open or create a People note for a participant
+   */
+  private async openPersonNote(participant: Participant): Promise<void> {
+    // Try to find existing People note by email
+    const peopleFolder = this.settings.peopleFolder;
+    const files = this.app.vault.getMarkdownFiles();
+
+    for (const file of files) {
+      if (!file.path.startsWith(peopleFolder)) continue;
+
+      const cache = this.app.metadataCache.getFileCache(file);
+      const frontmatter = cache?.frontmatter;
+
+      if (frontmatter?.email === participant.email || frontmatter?.emails?.includes(participant.email)) {
+        const leaf = this.app.workspace.getLeaf(false);
+        await leaf.openFile(file);
+        return;
+      }
+    }
+
+    // Create new People note
+    const path = normalizePath(`${peopleFolder}/${participant.name}.md`);
+
+    // Ensure folder exists
+    const folder = this.app.vault.getAbstractFileByPath(peopleFolder);
+    if (!folder) {
+      await this.app.vault.createFolder(peopleFolder);
+    }
+
+    const content = `---
+email: ${participant.email}
+---
+
+# ${participant.name}
+`;
+
+    const file = await this.app.vault.create(path, content);
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
   }
 
   /**

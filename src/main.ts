@@ -15,6 +15,8 @@ import { TemporalDriftSettingTab } from "./settings";
 import { registerCommands } from "./commands";
 import { registerProtocolHandlers } from "./event-handlers";
 import { AutoTimestampExtension } from "./decorators/auto-timestamp";
+import { TimelineDecorationExtension } from "./editor/timeline-extension";
+import { TimelineDecorationsExtension } from "./editor/timeline-decorations";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
@@ -23,6 +25,7 @@ export default class TemporalDriftPlugin extends Plugin {
   private taskIndexService: TaskIndexService | null = null;
   private googleTasksSyncService: GoogleTasksSyncService | null = null;
   private autoTimestampExtension: AutoTimestampExtension | null = null;
+  private timelineDecorationsExtension: TimelineDecorationsExtension | null = null;
   private settingsAwareComponents: SettingsAware[] = [];
 
   async onload(): Promise<void> {
@@ -111,6 +114,10 @@ export default class TemporalDriftPlugin extends Plugin {
     this.autoTimestampExtension = new AutoTimestampExtension(this.settings);
     this.registerEditorExtension(this.autoTimestampExtension.getExtension());
 
+    // Register timeline decorations extension (inline rendering)
+    this.timelineDecorationsExtension = new TimelineDecorationsExtension(this.settings);
+    this.registerEditorExtension(this.timelineDecorationsExtension.getExtension());
+
     // Add settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
 
@@ -130,7 +137,9 @@ export default class TemporalDriftPlugin extends Plugin {
     (this as any).api = {
       // Create daily note and return path
       createDailyNote: async (tp: any): Promise<string> => {
-        const file = await this.dailyNoteService!.openToday();
+        const today = new Date();
+        const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const file = await this.dailyNoteService!.createDailyNote(dateStr);
         return file.path;
       },
 
@@ -200,8 +209,9 @@ export default class TemporalDriftPlugin extends Plugin {
     for (const component of this.settingsAwareComponents) {
       component.updateSettings(this.settings);
     }
-    // Also update auto-timestamp extension
+    // Also update editor extensions
     this.autoTimestampExtension?.updateSettings(this.settings);
+    this.timelineDecorationsExtension?.updateSettings(this.settings);
   }
 
   /**
@@ -256,8 +266,8 @@ export default class TemporalDriftPlugin extends Plugin {
       return;
     }
 
-    // Create new view in right sidebar
-    const leaf = this.app.workspace.getRightLeaf(false);
+    // Create new view in main editor area
+    const leaf = this.app.workspace.getLeaf(true);
     if (leaf) {
       await leaf.setViewState({
         type: VIEW_TYPE_TEMPORAL_DRIFT,

@@ -3,17 +3,10 @@
 // ============================================================================
 
 import { App, TFile } from "obsidian";
-import { TemporalDriftSettings, SettingsAware } from "../types";
+import { TemporalDriftSettings, SettingsAware, Participant, CalendarEvent } from "../types";
 
-export interface CalendarEvent {
-  id: string;
-  title: string;
-  start: Date;
-  end: Date;
-  participants: string[];
-  location?: string;
-  description?: string;
-}
+// Re-export for compatibility
+export type { Participant, CalendarEvent };
 
 export class CalendarService implements SettingsAware {
   private app: App;
@@ -76,14 +69,17 @@ export class CalendarService implements SettingsAware {
   }
 
   /**
-   * Extract participant emails from event
+   * Extract participants with name and email from event
    */
-  private extractParticipants(event: any): string[] {
+  private extractParticipants(event: any): Participant[] {
     const attendees = event.attendees || [];
     return attendees
       .filter((a: any) => !a.resource && !a.self)
-      .map((a: any) => a.email || a.displayName || "")
-      .filter((email: string) => email.length > 0);
+      .map((a: any) => ({
+        name: a.displayName || this.emailToDisplayName(a.email || ""),
+        email: a.email || "",
+      }))
+      .filter((p: Participant) => p.email.length > 0);
   }
 
   /**

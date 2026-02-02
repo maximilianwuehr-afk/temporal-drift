@@ -2,7 +2,7 @@
 // Temporal Drift Commands
 // ============================================================================
 
-import { Editor, MarkdownView } from "obsidian";
+import { Editor, MarkdownView, MarkdownFileInfo } from "obsidian";
 import type TemporalDriftPlugin from "./main";
 import { formatTime, formatDate } from "./utils/time";
 
@@ -43,7 +43,7 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
   plugin.addCommand({
     id: "add-inline-note",
     name: "Add inline note",
-    editorCallback: (editor: Editor, view: MarkdownView) => {
+    editorCallback: (editor: Editor, ctx: MarkdownView | MarkdownFileInfo) => {
       const time = formatTime(new Date());
       const cursor = editor.getCursor();
       const line = editor.getLine(cursor.line);
