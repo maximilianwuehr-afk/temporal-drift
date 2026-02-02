@@ -345,12 +345,8 @@ function createTimelineLivePreview(settings: TemporalDriftSettings): Extension {
           return;
         }
         
-        // Determine if we should rebuild
-        const shouldRebuild = update.docChanged || 
-                              update.viewportChanged || 
-                              (this.decorations === Decoration.none && update.view.state.doc.length > 10);
-        
-        if (!shouldRebuild) {
+        // Only rebuild on actual content or viewport changes
+        if (!update.docChanged && !update.viewportChanged) {
           return;
         }
         
