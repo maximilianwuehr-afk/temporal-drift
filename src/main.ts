@@ -2,7 +2,7 @@
 // Temporal Drift - Main Plugin Entry
 // ============================================================================
 
-import { Plugin, MarkdownView } from "obsidian";
+import { Plugin, MarkdownView, Notice, TFile, normalizePath } from "obsidian";
 import { Extension } from "@codemirror/state";
 
 import { DEFAULT_SETTINGS, TemporalDriftSettings } from "./types";
@@ -74,6 +74,47 @@ export default class TemporalDriftPlugin extends Plugin {
         maybeRememberDailyNote(file);
       })
     );
+
+    // Protocol handler for reliable remote opening (bypasses flaky UI automation)
+    // Usage: obsidian://td-open?vault=wuehr&path=Daily%20notes%2F2027-01-01.md
+    this.registerObsidianProtocolHandler("td-open", async (params) => {
+      const rawPath = (params.path || params.file || "").toString();
+      if (!rawPath) {
+        new Notice("Temporal Drift: missing path");
+        return;
+      }
+
+      const decoded = decodeURIComponent(rawPath);
+      const tryPaths = [
+        normalizePath(decoded),
+        normalizePath(decoded.endsWith(".md") ? decoded : decoded + ".md"),
+      ];
+
+      let file: TFile | null = null;
+      for (const p of tryPaths) {
+        const af = this.app.vault.getAbstractFileByPath(p);
+        if (af instanceof TFile) {
+          file = af;
+          break;
+        }
+      }
+
+      // Fallback: search by basename
+      if (!file) {
+        const base = normalizePath(decoded).split("/").pop() || decoded;
+        const baseMd = base.endsWith(".md") ? base : base + ".md";
+        file = this.app.vault.getMarkdownFiles().find((f) => f.path.endsWith("/" + baseMd) || f.path === baseMd) || null;
+      }
+
+      if (!file) {
+        new Notice(`Temporal Drift: file not found: ${decoded}`);
+        return;
+      }
+
+      const leaf = this.app.workspace.getLeaf(true);
+      await leaf.openFile(file, { active: true });
+      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    });
 
     // Register commands
     registerCommands(this);
