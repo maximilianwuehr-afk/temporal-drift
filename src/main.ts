@@ -2,7 +2,7 @@
 // Temporal Drift - Main Plugin Entry
 // ============================================================================
 
-import { Plugin } from "obsidian";
+import { Plugin, MarkdownView } from "obsidian";
 import { Extension } from "@codemirror/state";
 
 import { DEFAULT_SETTINGS, TemporalDriftSettings } from "./types";
@@ -15,7 +15,10 @@ import { TemporalDriftView, VIEW_TYPE_TEMPORAL_DRIFT } from "./views/TemporalDri
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
-  
+
+  // Last daily note the user was looking at (used when opening the custom view)
+  lastActiveDailyNotePath: string | null = null;
+
   private autoTimestamp: AutoTimestampExtension | null = null;
   private timeline: TimelineExtension | null = null;
 
@@ -37,6 +40,33 @@ export default class TemporalDriftPlugin extends Plugin {
 
     // Register settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
+
+    // Track last active daily note (so the ItemView can open the correct date)
+    const maybeRememberDailyNote = (file: any) => {
+      if (!file || typeof file.path !== "string") return;
+      const prefix = `${this.settings.dailyNotesFolder}/`;
+      if (!file.path.startsWith(prefix)) return;
+      if (!/^\d{4}-\d{2}-\d{2}\.md$/.test(file.name)) return;
+      this.lastActiveDailyNotePath = file.path;
+    };
+
+    // Seed on startup (active file)
+    maybeRememberDailyNote(this.app.workspace.getActiveFile());
+
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        const view = leaf?.view;
+        // MarkdownView import avoided here; check shape.
+        const file = (view as any)?.file;
+        maybeRememberDailyNote(file);
+      })
+    );
+
+    this.registerEvent(
+      this.app.workspace.on("file-open", (file) => {
+        maybeRememberDailyNote(file);
+      })
+    );
 
     // Register commands
     registerCommands(this);
@@ -125,6 +155,21 @@ ${formatTime(date)} `;
   }
 
   async activateView(): Promise<void> {
+    // Capture the currently-active daily note BEFORE switching focus to the ItemView.
+    const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const activeMarkdownFile = activeMarkdownView?.file ?? this.app.workspace.getActiveFile();
+
+    if (activeMarkdownFile) {
+      const prefix = `${this.settings.dailyNotesFolder}/`;
+      if (
+        typeof activeMarkdownFile.path === "string" &&
+        activeMarkdownFile.path.startsWith(prefix) &&
+        /^\d{4}-\d{2}-\d{2}\.md$/.test(activeMarkdownFile.name)
+      ) {
+        this.lastActiveDailyNotePath = activeMarkdownFile.path;
+      }
+    }
+
     const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_TEMPORAL_DRIFT);
     if (existing.length > 0) {
       this.app.workspace.revealLeaf(existing[0]);

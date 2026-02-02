@@ -201,12 +201,20 @@ export class TemporalDriftView extends ItemView {
     });
 
     const resolveFile = (): TFile | null => {
+      // 1) Prefer last active daily note captured by the plugin (most reliable).
+      if (this.plugin.lastActiveDailyNotePath) {
+        const f = this.app.vault.getAbstractFileByPath(this.plugin.lastActiveDailyNotePath);
+        if (f instanceof TFile) return f;
+      }
+
+      // 2) Fallback: any currently open markdown file.
       const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
       const f = activeView?.file ?? this.app.workspace.getActiveFile();
       if (f && isDailyNotePath(f.path, this.plugin.settings.dailyNotesFolder) && looksLikeDailyNoteFilename(f.path)) {
         return f;
       }
-      // Fallback to today's daily note if it exists
+
+      // 3) Last resort: today's daily note if it exists
       const today = formatDate(new Date());
       const path = normalizePath(`${this.plugin.settings.dailyNotesFolder}/${today}.md`);
       const maybe = this.app.vault.getAbstractFileByPath(path);
@@ -353,6 +361,18 @@ export class TemporalDriftView extends ItemView {
 
     // initial render
     await render();
+
+    // If the user opens a different daily note, follow it.
+    this.registerEvent(
+      this.app.workspace.on("file-open", async (file) => {
+        if (!file) return;
+        if (!isDailyNotePath(file.path, this.plugin.settings.dailyNotesFolder)) return;
+        if (!looksLikeDailyNoteFilename(file.path)) return;
+
+        this.plugin.lastActiveDailyNotePath = file.path;
+        await render();
+      })
+    );
 
     // rerender on file changes
     this.registerEvent(
