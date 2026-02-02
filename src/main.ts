@@ -8,6 +8,7 @@ import { Extension } from "@codemirror/state";
 import { DEFAULT_SETTINGS, TemporalDriftSettings } from "./types";
 import { TemporalDriftSettingTab } from "./settings";
 import { TimelineExtension } from "./editor/timeline-extension";
+import { TimelineLivePreviewExtension } from "./editor/timeline-live-preview";
 import { AutoTimestampExtension } from "./editor/auto-timestamp";
 import { registerCommands } from "./commands";
 import { formatDate, formatTime } from "./utils/time";
@@ -21,6 +22,7 @@ export default class TemporalDriftPlugin extends Plugin {
 
   private autoTimestamp: AutoTimestampExtension | null = null;
   private timeline: TimelineExtension | null = null;
+  private timelineLivePreview: TimelineLivePreviewExtension | null = null;
 
   async onload() {
     console.log("Loading Temporal Drift plugin");
@@ -31,6 +33,7 @@ export default class TemporalDriftPlugin extends Plugin {
     // Initialize extensions
     this.autoTimestamp = new AutoTimestampExtension(this.settings);
     this.timeline = new TimelineExtension(this.settings);
+    this.timelineLivePreview = new TimelineLivePreviewExtension(this.settings);
 
     // Register CM6 extensions (raw editor mode)
     this.registerEditorExtension(this.buildEditorExtensions());
@@ -109,6 +112,11 @@ export default class TemporalDriftPlugin extends Plugin {
       extensions.push(...this.timeline.getExtension());
     }
 
+    // Live Preview rich cards (only active in Live Preview mode)
+    if (this.timelineLivePreview) {
+      extensions.push(...this.timelineLivePreview.getExtension());
+    }
+
     if (this.autoTimestamp) {
       extensions.push(...this.autoTimestamp.getExtension());
     }
@@ -126,6 +134,7 @@ export default class TemporalDriftPlugin extends Plugin {
     // Update extensions with new settings
     this.autoTimestamp?.updateSettings(this.settings);
     this.timeline?.updateSettings(this.settings);
+    this.timelineLivePreview?.updateSettings(this.settings);
   }
 
   async createDailyNote() {

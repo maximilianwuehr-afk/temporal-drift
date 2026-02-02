@@ -917,3 +917,125 @@
 .theme-dark .cm-content .td-current-block {
   background: rgba(155, 155, 155, 0.06);
 }
+
+/* ============================================================================
+   Live Preview widgets (inline rich cards inside CM6 editor)
+   ============================================================================ */
+
+.cm-content .td-live-preview {
+  /* Ensure we own the typography inside the widget */
+  --u: 8px;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.cm-content .td-live-preview .hour {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 0;
+  min-height: calc(var(--u) * 10);
+}
+
+.cm-content .td-live-preview .hour-time {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--td-time-color);
+  padding-top: calc(var(--u) * 2);
+  text-align: right;
+  padding-right: calc(var(--u) * 2);
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-content .td-live-preview .hour-slot {
+  border-left: 1px solid var(--td-border, var(--background-modifier-border));
+  padding: calc(var(--u) * 2) 0 calc(var(--u) * 2) calc(var(--u) * 3);
+  position: relative;
+}
+
+.cm-content .td-live-preview .event {
+  padding: calc(var(--u) * 2);
+  margin: 0;
+  margin-left: calc(-1 * var(--u) * 3);
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.4);
+}
+
+.theme-dark .cm-content .td-live-preview .event {
+  background: rgba(0,0,0,0.15);
+}
+
+.cm-content .td-live-preview .event-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: calc(var(--u) * 2);
+}
+
+.cm-content .td-live-preview .event-title {
+  font-weight: 500;
+  margin: 0;
+  padding: 0;
+}
+
+.cm-content .td-live-preview .event-location {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 2px 0 0 0;
+  padding: 0;
+}
+
+.cm-content .td-live-preview .event-right {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1);
+  flex-shrink: 0;
+}
+
+.cm-content .td-live-preview .event-duration {
+  font-size: 11px;
+  color: var(--td-time-color);
+}
+
+.cm-content .td-live-preview .event-participants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 1);
+  margin-top: calc(var(--u) * 2);
+}
+
+.cm-content .td-live-preview .participant {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.cm-content .td-live-preview .participant-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--background-modifier-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.cm-content .td-live-preview .event-body {
+  margin-top: calc(var(--u) * 2);
+}
+
+.cm-content .td-live-preview .event-body-text {
+  white-space: pre-line;
+  font-size: 13px;
+  color: var(--text-normal);
+}
