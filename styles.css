@@ -729,7 +729,7 @@
   color: var(--td-time-color);
   padding-top: calc(var(--u) * 2);
   text-align: right;
-  padding-right: 16px; /* 2 * 8px grid unit */
+  padding-right: calc(var(--u) * 2); /* 16px breathing room */
   font-variant-numeric: tabular-nums;
 }
 
