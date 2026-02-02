@@ -16,7 +16,7 @@ import {
 import { editorInfoField } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 
-const TIME_MARK = Decoration.mark({ class: "temporal-drift-cm-time" });
+const TIME_MARK = Decoration.mark({ class: "td-time", attributes: { "data-type": "time" } });
 
 function buildTimeDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
   const editorInfo = view.state.field(editorInfoField, false);

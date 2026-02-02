@@ -16,7 +16,6 @@ import { registerCommands } from "./commands";
 import { registerProtocolHandlers } from "./event-handlers";
 import { AutoTimestampExtension } from "./decorators/auto-timestamp";
 import { TimelineDecorationExtension } from "./editor/timeline-extension";
-import { TimelineDecorationsExtension } from "./editor/timeline-decorations";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
@@ -25,7 +24,7 @@ export default class TemporalDriftPlugin extends Plugin {
   private taskIndexService: TaskIndexService | null = null;
   private googleTasksSyncService: GoogleTasksSyncService | null = null;
   private autoTimestampExtension: AutoTimestampExtension | null = null;
-  private timelineDecorationsExtension: TimelineDecorationsExtension | null = null;
+  private timelineDecorationExtension: TimelineDecorationExtension | null = null;
   private settingsAwareComponents: SettingsAware[] = [];
 
   async onload(): Promise<void> {
@@ -114,9 +113,9 @@ export default class TemporalDriftPlugin extends Plugin {
     this.autoTimestampExtension = new AutoTimestampExtension(this.settings);
     this.registerEditorExtension(this.autoTimestampExtension.getExtension());
 
-    // Register timeline decorations extension (inline rendering)
-    this.timelineDecorationsExtension = new TimelineDecorationsExtension(this.settings);
-    this.registerEditorExtension(this.timelineDecorationsExtension.getExtension());
+    // Register timeline decoration extension (MVP: style HH:MM timestamps inline)
+    this.timelineDecorationExtension = new TimelineDecorationExtension(this.settings);
+    this.registerEditorExtension(this.timelineDecorationExtension.getExtension());
 
     // Add settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
@@ -211,7 +210,7 @@ export default class TemporalDriftPlugin extends Plugin {
     }
     // Also update editor extensions
     this.autoTimestampExtension?.updateSettings(this.settings);
-    this.timelineDecorationsExtension?.updateSettings(this.settings);
+    this.timelineDecorationExtension?.updateSettings(this.settings);
   }
 
   /**
