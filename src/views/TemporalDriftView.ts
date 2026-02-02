@@ -55,6 +55,12 @@ function stripWikilinks(text: string): string {
   });
 }
 
+function stripEventIdSuffix(title: string): string {
+  // Remove " ~eventId" suffix from displayed event titles (keep link target intact)
+  // Example: "Standup ~test001" -> "Standup"
+  return title.replace(/\s*~[a-zA-Z0-9]+$/, "").trim();
+}
+
 function extractParticipants(head: string): Array<{ target: string; display: string }> {
   // Example: "[[Standup ~id]] with [[Anna Meyer]], [[Tom Schmidt]]"
   const withIdx = head.indexOf(" with ");
@@ -328,7 +334,11 @@ export class TemporalDriftView extends ItemView {
         // Title + location (prototype-style)
         const titleText = (() => {
           const link = extractPrimaryLink(entry.head);
-          if (link) return link.display;
+          if (link) {
+            const display = link.display;
+            // If this is an event-like title containing a "~eventId" suffix, hide it in UI.
+            return stripEventIdSuffix(display);
+          }
 
           if (entry.type === "task") {
             const m = entry.head.match(/\[\[([^\]]+)\]\]/);
