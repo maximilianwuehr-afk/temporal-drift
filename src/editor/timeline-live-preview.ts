@@ -14,7 +14,7 @@ import {
   ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { editorInfoField, editorLivePreviewField } from "obsidian";
+import { editorInfoField, editorLivePreviewField, normalizePath } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 
 type Participant = { target: string; display: string };
@@ -293,18 +293,36 @@ function buildEntriesFromVisibleRanges(view: EditorView): TimelineEntry[] {
 }
 
 function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
-  // Only in Live Preview
-  const isLive = view.state.field(editorLivePreviewField, false);
-  if (!isLive) return Decoration.none;
+  // DEBUG (temporary): prove whether this is being called at all.
+  // eslint-disable-next-line no-console
+  console.log("[TD] buildDecorations called");
+
+  // Live Preview detection: field (preferred) + DOM fallback.
+  const isLiveField = view.state.field(editorLivePreviewField, false);
+  const isLiveDom = !!view.dom.closest(".markdown-source-view.is-live-preview");
+  const isLive = isLiveField || isLiveDom;
 
   // Only in daily notes
   const editorInfo = view.state.field(editorInfoField, false);
   const file = editorInfo?.file;
-  if (!file?.path?.startsWith(`${settings.dailyNotesFolder}/`)) {
+
+  // eslint-disable-next-line no-console
+  console.log("[TD] isLiveField=", isLiveField, "isLiveDom=", isLiveDom, "file=", file?.path, "folder=", settings.dailyNotesFolder);
+
+  if (!isLive) return Decoration.none;
+
+  const folderPrefix = normalizePath(settings.dailyNotesFolder + "/");
+  const filePath = file?.path ? normalizePath(file.path) : "";
+
+  if (!filePath.startsWith(folderPrefix)) {
+    // eslint-disable-next-line no-console
+    console.log("[TD] Skipping - not in daily notes folder", { filePath, folderPrefix });
     return Decoration.none;
   }
 
   const entries = buildEntriesFromVisibleRanges(view);
+  // eslint-disable-next-line no-console
+  console.log("[TD] entries=", entries.length);
   if (entries.length === 0) return Decoration.none;
 
   // Sort by from; CodeMirror requires ordered ranges.
