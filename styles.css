@@ -637,3 +637,241 @@
   border-radius: 50%;
   background: var(--text-accent);
 }
+
+/* ============================================================================
+   PROTOTYPE VIEW STYLES (scoped)
+   Matches ~/Workspace/projects/temporal-drift/prototype/index.html
+   ============================================================================ */
+
+.temporal-drift-view.td-prototype {
+  /* Prototype palette */
+  --bg-primary: #FAF9F7;
+  --bg-secondary: #F2F0ED;
+  --bg-active: #FFFFFF;
+  --text-primary: #1A1A1A;
+  --text-secondary: #6B6B6B;
+  --text-tertiary: #9B9B9B;
+  --accent: #C45D3A;
+  --accent-subtle: rgba(196, 93, 58, 0.06);
+  --accent-light: rgba(196, 93, 58, 0.03);
+  --border: #E5E3DF;
+  --border-light: #EFEDE9;
+
+  /* Inter only */
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* 8px grid */
+  --u: 8px;
+
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  height: 100%;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'tnum';
+}
+
+.temporal-drift-view.td-prototype .calendar {
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+}
+
+.temporal-drift-view.td-prototype .calendar-header {
+  padding: calc(var(--u) * 4);
+  border-bottom: 1px solid var(--border);
+}
+
+.temporal-drift-view.td-prototype .label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.temporal-drift-view.td-prototype .calendar-date {
+  font-size: 18px;
+  font-weight: 500;
+  margin-top: 4px;
+  letter-spacing: -0.02em;
+}
+
+.temporal-drift-view.td-prototype .timeline {
+  flex: 1;
+  overflow-y: auto;
+  padding: calc(var(--u) * 2) calc(var(--u) * 4);
+}
+
+.temporal-drift-view.td-prototype .hour {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  min-height: calc(var(--u) * 10);
+}
+
+.temporal-drift-view.td-prototype .hour-time {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  padding-top: calc(var(--u) * 2);
+  text-align: right;
+  padding-right: calc(var(--u) * 2);
+  font-variant-numeric: tabular-nums;
+}
+
+.temporal-drift-view.td-prototype .hour.now .hour-time { color: var(--accent); }
+
+.temporal-drift-view.td-prototype .hour-slot {
+  border-left: 1px solid var(--border-light);
+  padding: calc(var(--u) * 2) 0 calc(var(--u) * 2) calc(var(--u) * 3);
+  position: relative;
+}
+
+.temporal-drift-view.td-prototype .hour.now .hour-slot::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 18px;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.temporal-drift-view.td-prototype .event {
+  padding: calc(var(--u) * 2);
+  margin: 0 calc(-1 * var(--u) * 2);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  border: 1px solid transparent;
+}
+
+.temporal-drift-view.td-prototype .event:hover {
+  background: var(--accent-light);
+  border-color: var(--border-light);
+}
+
+.temporal-drift-view.td-prototype .event.active {
+  background: var(--bg-active);
+  border-color: var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.temporal-drift-view.td-prototype .event-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: calc(var(--u) * 2);
+}
+
+.temporal-drift-view.td-prototype .event-title { font-weight: 500; }
+
+.temporal-drift-view.td-prototype .event-right {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1);
+  flex-shrink: 0;
+}
+
+.temporal-drift-view.td-prototype .event-duration {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.temporal-drift-view.td-prototype .event-location {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.temporal-drift-view.td-prototype .event-participants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 1);
+  margin-top: calc(var(--u) * 2);
+}
+
+.temporal-drift-view.td-prototype .participant {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  text-decoration: none;
+}
+
+.temporal-drift-view.td-prototype .participant:hover {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+.temporal-drift-view.td-prototype .participant-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.temporal-drift-view.td-prototype .event-notes {
+  margin-top: calc(var(--u) * 2);
+  padding-top: calc(var(--u) * 2);
+  border-top: 1px solid var(--border-light);
+}
+
+.temporal-drift-view.td-prototype .notes-field {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.temporal-drift-view.td-prototype .notes-field::placeholder {
+  color: var(--text-tertiary);
+}
+
+.temporal-drift-view.td-prototype .empty {
+  padding: calc(var(--u) * 2) 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ============================================================================
+   CM6 editor decorations (raw editor mode)
+   ============================================================================ */
+
+.cm-content .td-timestamp {
+  font-family: var(--font, 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
+  font-weight: 600;
+  color: #C45D3A;
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-content .td-current-block {
+  background: rgba(196, 93, 58, 0.03);
+  border-left: 2px solid #C45D3A;
+  padding-left: 0.5em;
+  margin-left: -0.6em;
+}

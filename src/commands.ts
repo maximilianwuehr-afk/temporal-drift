@@ -7,38 +7,6 @@ import type TemporalDriftPlugin from "./main";
 import { formatTime, formatDate } from "./utils/time";
 
 export function registerCommands(plugin: TemporalDriftPlugin): void {
-  // Create daily note
-  plugin.addCommand({
-    id: "create-daily-note",
-    name: "Create daily note",
-    callback: async () => {
-      await plugin.getDailyNoteService().openToday();
-    },
-  });
-
-  // Open week view
-  plugin.addCommand({
-    id: "open-week-view",
-    name: "Open week view",
-    callback: async () => {
-      await plugin.activateView();
-    },
-  });
-
-  // Go to today in view
-  plugin.addCommand({
-    id: "go-to-today",
-    name: "Go to today",
-    callback: async () => {
-      const view = plugin.getView();
-      if (view) {
-        await view.goToToday();
-      } else {
-        await plugin.activateView();
-      }
-    },
-  });
-
   // Add inline note with timestamp
   plugin.addCommand({
     id: "add-inline-note",
@@ -67,50 +35,38 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     name: "Quick capture",
     callback: async () => {
       const today = formatDate(new Date());
-      const time = formatTime(new Date());
+      const path = `${plugin.settings.dailyNotesFolder}/${today}.md`;
 
-      // Append timestamped entry to today's note
-      await plugin.getDailyNoteService().appendEntry(today, time, "");
+      // Check if file exists
+      let file = plugin.app.vault.getAbstractFileByPath(path);
+      
+      if (!file) {
+        // Create the note
+        const time = formatTime(new Date());
+        const template = `# ${today}
 
-      // Open the note and position cursor
-      await plugin.getDailyNoteService().openToday();
+## Thankful for
 
-      // Use workspace event to insert cursor after file is ready
-      const onActiveLeafChange = plugin.app.workspace.on("active-leaf-change", () => {
-        const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        if (view) {
-          const editor = view.editor;
-          const lastLine = editor.lastLine();
-          const lastLineContent = editor.getLine(lastLine);
 
-          // Position cursor at end of the timestamp line
-          editor.setCursor({ line: lastLine, ch: lastLineContent.length });
-          editor.focus();
-        }
-        // Unregister after first trigger
-        plugin.app.workspace.offref(onActiveLeafChange);
-      });
-    },
-  });
+## Focus
 
-  // Open task sidebar
-  plugin.addCommand({
-    id: "open-task-sidebar",
-    name: "Open task sidebar",
-    callback: async () => {
-      await plugin.activateTaskSidebar();
-    },
-  });
 
-  // Create new task
-  plugin.addCommand({
-    id: "create-task",
-    name: "Create task",
-    callback: async () => {
-      const title = prompt("Task name:");
-      if (title) {
-        const file = await plugin.getTaskIndexService().createTask(title);
-        await plugin.app.workspace.getLeaf(false).openFile(file);
+${time} `;
+        file = await plugin.app.vault.create(path, template);
+      }
+
+      // Open the note
+      const leaf = plugin.app.workspace.getLeaf(false);
+      await leaf.openFile(file as any);
+
+      // Position cursor at end
+      const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
+      if (view) {
+        const editor = view.editor;
+        const lastLine = editor.lastLine();
+        const lastLineContent = editor.getLine(lastLine);
+        editor.setCursor({ line: lastLine, ch: lastLineContent.length });
+        editor.focus();
       }
     },
   });

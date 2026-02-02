@@ -1,11 +1,15 @@
 // ============================================================================
 // Timeline Editor Extension (CodeMirror)
 //
-// MVP: decorate HH:MM timestamps in daily notes so the editor becomes
-// markdown-first while still visually scannable.
+// Phase 1:
+// - Detect HH:mm at start of line
+// - Decorate timestamps (monospace semi-bold amber)
+// - Highlight the current time block (subtle left border accent)
+//
+// Markdown-first: decorations only; underlying text stays valid markdown.
+// Performance: only scan visibleRanges.
 // ============================================================================
 
-import { Extension, RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
   DecorationSet,
@@ -13,23 +17,52 @@ import {
   ViewPlugin,
   ViewUpdate,
 } from "@codemirror/view";
+import { Extension, RangeSetBuilder } from "@codemirror/state";
 import { editorInfoField } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 
-const TIME_MARK = Decoration.mark({ class: "td-time", attributes: { "data-type": "time" } });
+// Regex to match timestamps at the start of lines: HH:mm
+const TIMESTAMP_REGEX = /^(\d{2}):(\d{2})\b/;
 
-function buildTimeDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
+const timestampMark = Decoration.mark({
+  class: "td-timestamp",
+});
+
+const currentBlockMark = Decoration.mark({
+  class: "td-current-block",
+});
+
+function minutesSinceMidnight(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function parseTimeToMinutes(hh: string, mm: string): number {
+  const h = Number(hh);
+  const m = Number(mm);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return NaN;
+  return h * 60 + m;
+}
+
+type DecoSpec = { from: number; to: number; deco: Decoration };
+
+function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
   const editorInfo = view.state.field(editorInfoField, false);
   const file = editorInfo?.file;
 
-  // Only apply in the daily notes folder
+  // Only apply to daily notes
   if (!file?.path.startsWith(settings.dailyNotesFolder)) {
     return Decoration.none;
   }
 
-  const builder = new RangeSetBuilder<Decoration>();
+  const nowMins = minutesSinceMidnight(new Date());
 
-  // Only scan what is visible for performance
+  const decos: DecoSpec[] = [];
+
+  // Track the best visible candidate block.
+  // Prefer the closest time <= now; if none, use the closest time > now.
+  let bestPast: { diff: number; from: number; to: number } | null = null;
+  let bestFuture: { diff: number; from: number; to: number } | null = null;
+
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
 
@@ -37,32 +70,59 @@ function buildTimeDecorations(view: EditorView, settings: TemporalDriftSettings)
       const line = view.state.doc.lineAt(pos);
       if (line.from > to) break;
 
-      // Start-of-line HH:MM (keep regex iOS-safe, no lookbehind)
-      const match = line.text.match(/^(\d{2}):(\d{2})/);
+      const match = line.text.match(TIMESTAMP_REGEX);
       if (match) {
-        builder.add(line.from, line.from + 5, TIME_MARK);
+        const timeMins = parseTimeToMinutes(match[1], match[2]);
+        if (Number.isFinite(timeMins)) {
+          // Timestamp decoration (just the HH:mm part)
+          decos.push({ from: line.from, to: line.from + 5, deco: timestampMark });
+
+          const diff = timeMins - nowMins;
+          if (diff <= 0) {
+            const abs = Math.abs(diff);
+            if (!bestPast || abs < bestPast.diff) {
+              bestPast = { diff: abs, from: line.from, to: line.to };
+            }
+          } else {
+            if (!bestFuture || diff < bestFuture.diff) {
+              bestFuture = { diff, from: line.from, to: line.to };
+            }
+          }
+        }
       }
 
       pos = line.to + 1;
     }
   }
 
+  const current = bestPast ?? bestFuture;
+  if (current) {
+    decos.push({ from: current.from, to: current.to, deco: currentBlockMark });
+  }
+
+  // RangeSetBuilder requires sorted ranges.
+  decos.sort((a, b) => (a.from - b.from) || (a.to - b.to));
+
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const d of decos) {
+    builder.add(d.from, d.to, d.deco);
+  }
+
   return builder.finish();
 }
 
-export function createTimelineDecorationExtension(settings: TemporalDriftSettings): Extension {
-  const plugin = ViewPlugin.fromClass(
-    class TimestampDecorations {
+function createTimelineExtension(settings: TemporalDriftSettings): Extension {
+  return ViewPlugin.fromClass(
+    class TimelineDecorations {
       decorations: DecorationSet;
 
       constructor(view: EditorView) {
-        this.decorations = buildTimeDecorations(view, settings);
+        this.decorations = buildDecorations(view, settings);
       }
 
       update(update: ViewUpdate): void {
-        // NOTE: keep this cheap; we only rebuild for doc edits or viewport shifts.
         if (update.docChanged || update.viewportChanged) {
-          this.decorations = buildTimeDecorations(update.view, settings);
+          this.decorations = buildDecorations(update.view, settings);
         }
       }
     },
@@ -70,15 +130,12 @@ export function createTimelineDecorationExtension(settings: TemporalDriftSetting
       decorations: (v) => v.decorations,
     }
   );
-
-  return plugin;
 }
 
 /**
- * Array-based wrapper so we can rebuild on settings changes
- * (pattern matches AutoTimestampExtension).
+ * Array wrapper to allow settings updates.
  */
-export class TimelineDecorationExtension {
+export class TimelineExtension {
   private extension: Extension[] = [];
   private settings: TemporalDriftSettings;
 
@@ -98,6 +155,6 @@ export class TimelineDecorationExtension {
 
   private rebuild(): void {
     this.extension.length = 0;
-    this.extension.push(createTimelineDecorationExtension(this.settings));
+    this.extension.push(createTimelineExtension(this.settings));
   }
 }
