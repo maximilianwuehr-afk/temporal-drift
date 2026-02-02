@@ -1,0 +1,20 @@
+{
+  "name": "temporal-drift",
+  "version": "0.1.0",
+  "description": "Timeline-based daily notes with time as list numeration",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "keywords": ["obsidian", "plugin", "daily-notes", "timeline"],
+  "author": "Fellowship",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "latest",
+    "typescript": "^5.3.0"
+  }
+}

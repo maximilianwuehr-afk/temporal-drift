@@ -18,11 +18,17 @@ export function createAutoTimestampExtension(settings: TemporalDriftSettings): E
     {
       key: "Enter",
       run: (view: EditorView): boolean => {
-        const editorInfo = view.state.field(editorInfoField, false);
-        const file = editorInfo?.file;
+        // Safely access file — may not exist on "New tab" screen
+        let file: { path: string } | null | undefined;
+        try {
+          const editorInfo = view.state.field(editorInfoField, false);
+          file = editorInfo?.file;
+        } catch {
+          return false;
+        }
 
         // Only apply inside the daily notes folder
-        if (!file?.path.startsWith(settings.dailyNotesFolder)) {
+        if (!file?.path || !file.path.startsWith(settings.dailyNotesFolder)) {
           return false;
         }
 

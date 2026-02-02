@@ -1,0 +1,70 @@
+/* Temporal Drift — Terminal meets Dieter Rams */
+
+:root {
+  --td-bg: #faf9f7;
+  --td-surface: #f0eeeb;
+  --td-text: #1a1a1a;
+  --td-text-muted: #666666;
+  --td-accent-amber: #b8864a;
+  --td-accent-clay: #a66b55;
+  --td-urgent: #d4574a;
+  --td-font-mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+  --td-font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.theme-dark {
+  --td-bg: #1a1a1a;
+  --td-surface: #242424;
+  --td-text: #e5e5e5;
+  --td-text-muted: #888888;
+  --td-accent-amber: #d4a574;
+  --td-accent-clay: #c4846c;
+}
+
+/* Timeline time stamps */
+.td-timestamp {
+  font-family: var(--td-font-mono);
+  font-weight: 600;
+  color: var(--td-accent-amber);
+  margin-right: 0.75em;
+}
+
+/* Event/meeting titles */
+.td-event-title {
+  font-family: var(--td-font-mono);
+  font-weight: 600;
+}
+
+/* Content text */
+.td-content {
+  font-family: var(--td-font-sans);
+  font-weight: 400;
+  color: var(--td-text);
+}
+
+/* Current time indicator */
+.td-current-block {
+  border-left: 2px solid var(--td-accent-amber);
+  padding-left: 0.5em;
+  margin-left: -0.6em;
+}
+
+/* Task inline tags */
+.td-due-tag {
+  font-family: var(--td-font-mono);
+  font-size: 0.85em;
+  color: var(--td-text-muted);
+  margin-left: 0.5em;
+}
+
+.td-priority-tag {
+  font-family: var(--td-font-mono);
+  font-size: 0.85em;
+  padding: 0 0.3em;
+  border-radius: 3px;
+  margin-left: 0.3em;
+}
+
+.td-priority-now { background: var(--td-accent-clay); color: white; }
+.td-priority-next { background: var(--td-surface); }
+.td-priority-later { color: var(--td-text-muted); }

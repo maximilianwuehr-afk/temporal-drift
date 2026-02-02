@@ -1,0 +1,10 @@
+{
+  "id": "temporal-drift",
+  "name": "Temporal Drift",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Timeline-based daily notes with time as list numeration",
+  "author": "Fellowship",
+  "authorUrl": "https://github.com/maximilianwuehr-afk",
+  "isDesktopOnly": false
+}

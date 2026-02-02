@@ -293,54 +293,74 @@ function buildEntriesFromVisibleRanges(view: EditorView): TimelineEntry[] {
 }
 
 function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
-  // DEBUG (temporary): prove whether this is being called at all.
-  // eslint-disable-next-line no-console
-  console.log("[TD] buildDecorations called");
+  // Wrap everything in try-catch to prevent blocking file opens
+  try {
+    // Early bail if view isn't ready
+    if (!view.state || !view.dom) {
+      return Decoration.none;
+    }
 
-  // Live Preview detection: field (preferred) + DOM fallback.
-  const isLiveField = view.state.field(editorLivePreviewField, false);
-  const isLiveDom = !!view.dom.closest(".markdown-source-view.is-live-preview");
-  const isLive = isLiveField || isLiveDom;
+    // Live Preview detection: field (preferred) + DOM fallback.
+    let isLiveField = false;
+    let isLiveDom = false;
+    try {
+      isLiveField = view.state.field(editorLivePreviewField, false) ?? false;
+      isLiveDom = !!view.dom.closest(".markdown-source-view.is-live-preview");
+    } catch {
+      // Field access failed — view not ready
+      return Decoration.none;
+    }
+    const isLive = isLiveField || isLiveDom;
 
-  // Only in daily notes
-  const editorInfo = view.state.field(editorInfoField, false);
-  const file = editorInfo?.file;
+    // Only in daily notes — safely access editorInfoField
+    let file: { path: string } | null | undefined = null;
+    try {
+      const editorInfo = view.state.field(editorInfoField, false);
+      file = editorInfo?.file;
+    } catch {
+      // Field access failed
+      return Decoration.none;
+    }
 
-  // eslint-disable-next-line no-console
-  console.log("[TD] isLiveField=", isLiveField, "isLiveDom=", isLiveDom, "file=", file?.path, "folder=", settings.dailyNotesFolder);
+    // No file loaded yet (e.g., "New tab" state) — skip silently
+    if (!file?.path) {
+      return Decoration.none;
+    }
 
-  if (!isLive) return Decoration.none;
+    if (!isLive) return Decoration.none;
 
-  const folderPrefix = normalizePath(settings.dailyNotesFolder + "/");
-  const filePath = file?.path ? normalizePath(file.path) : "";
+    const folderPrefix = normalizePath(settings.dailyNotesFolder + "/");
+    const filePath = normalizePath(file.path);
 
-  if (!filePath.startsWith(folderPrefix)) {
+    if (!filePath.startsWith(folderPrefix)) {
+      return Decoration.none;
+    }
+
+    const entries = buildEntriesFromVisibleRanges(view);
+    if (entries.length === 0) return Decoration.none;
+
+    // Sort by from; CodeMirror requires ordered ranges.
+    entries.sort((a, b) => a.from - b.from);
+
+    const builder = new RangeSetBuilder<Decoration>();
+    for (const entry of entries) {
+      const widget = new TimelineCardWidget(entry);
+
+      // Replace the entire block (timestamp line + indented children + blank separators).
+      builder.add(
+        entry.from,
+        entry.to,
+        Decoration.replace({ widget, block: true })
+      );
+    }
+
+    return builder.finish();
+  } catch (e) {
+    // Silently fail — never block file opens
     // eslint-disable-next-line no-console
-    console.log("[TD] Skipping - not in daily notes folder", { filePath, folderPrefix });
+    console.warn("[TD] buildDecorations error:", e);
     return Decoration.none;
   }
-
-  const entries = buildEntriesFromVisibleRanges(view);
-  // eslint-disable-next-line no-console
-  console.log("[TD] entries=", entries.length);
-  if (entries.length === 0) return Decoration.none;
-
-  // Sort by from; CodeMirror requires ordered ranges.
-  entries.sort((a, b) => a.from - b.from);
-
-  const builder = new RangeSetBuilder<Decoration>();
-  for (const entry of entries) {
-    const widget = new TimelineCardWidget(entry);
-
-    // Replace the entire block (timestamp line + indented children + blank separators).
-    builder.add(
-      entry.from,
-      entry.to,
-      Decoration.replace({ widget, block: true })
-    );
-  }
-
-  return builder.finish();
 }
 
 function createTimelineLivePreview(settings: TemporalDriftSettings): Extension {

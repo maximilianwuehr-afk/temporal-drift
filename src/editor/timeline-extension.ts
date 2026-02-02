@@ -46,11 +46,17 @@ function parseTimeToMinutes(hh: string, mm: string): number {
 type DecoSpec = { from: number; to: number; deco: Decoration };
 
 function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
-  const editorInfo = view.state.field(editorInfoField, false);
-  const file = editorInfo?.file;
+  // Safely access file — may not exist on "New tab" screen
+  let file: { path: string } | null | undefined;
+  try {
+    const editorInfo = view.state.field(editorInfoField, false);
+    file = editorInfo?.file;
+  } catch {
+    return Decoration.none;
+  }
 
   // Only apply to daily notes
-  if (!file?.path.startsWith(settings.dailyNotesFolder)) {
+  if (!file?.path || !file.path.startsWith(settings.dailyNotesFolder)) {
     return Decoration.none;
   }
 

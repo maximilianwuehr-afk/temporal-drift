@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Temporal Drift</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Original Temporal Drift palette */
+      --bg-primary: #FAF9F7;
+      --bg-secondary: #F2F0ED;
+      --bg-active: #FFFFFF;
+      --text-primary: #1A1A1A;
+      --text-secondary: #6B6B6B;
+      --text-tertiary: #9B9B9B;
+      --accent: #C45D3A;
+      --accent-subtle: rgba(196, 93, 58, 0.06);
+      --accent-light: rgba(196, 93, 58, 0.03);
+      --border: #E5E3DF;
+      --border-light: #EFEDE9;
+      
+      /* Single font - Inter only */
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      
+      /* 8px grid */
+      --u: 8px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-size: 14px; }
+
+    body {
+      font-family: var(--font);
+      font-size: 1rem;
+      line-height: 1.5;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'tnum';
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 400px 1fr;
+      height: 100vh;
+    }
+
+    /* ==================== INBOX ==================== */
+    .inbox {
+      background: var(--bg-secondary);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .inbox-header {
+      padding: calc(var(--u) * 4) calc(var(--u) * 4) calc(var(--u) * 3);
+    }
+
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+    }
+
+    .inbox-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 calc(var(--u) * 2);
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: 8px 1fr auto;
+      gap: calc(var(--u) * 2);
+      padding: calc(var(--u) * 2);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s ease;
+    }
+
+    .item:hover { background: rgba(0,0,0,0.025); }
+
+    .item.selected {
+      background: var(--bg-primary);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      margin-top: 6px;
+    }
+
+    .item.unread .dot { background: var(--accent); }
+
+    .item-body { min-width: 0; }
+
+    .item-from { font-weight: 500; }
+
+    .item-subject {
+      color: var(--text-secondary);
+      font-size: 13px;
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .item-meta {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-top: 4px;
+    }
+
+    .item-time {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .item-actions {
+      display: none;
+      gap: calc(var(--u) * 1);
+      margin-top: calc(var(--u) * 2);
+      grid-column: 2 / -1;
+    }
+
+    .item.selected .item-actions { display: flex; }
+
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      padding: 2px 5px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .hint {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
+
+    /* ==================== CALENDAR ==================== */
+    .calendar {
+      background: var(--bg-primary);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-left: 1px solid var(--border);
+    }
+
+    .calendar-header {
+      padding: calc(var(--u) * 4);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .calendar-date {
+      font-size: 18px;
+      font-weight: 500;
+      margin-top: 4px;
+      letter-spacing: -0.02em;
+    }
+
+    .timeline {
+      flex: 1;
+      overflow-y: auto;
+      padding: calc(var(--u) * 2) calc(var(--u) * 4);
+    }
+
+    .hour {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      min-height: calc(var(--u) * 10);
+    }
+
+    .hour-time {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-tertiary);
+      padding-top: calc(var(--u) * 2);
+      text-align: right;
+      padding-right: calc(var(--u) * 2);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hour.now .hour-time { color: var(--accent); }
+
+    .hour-slot {
+      border-left: 1px solid var(--border-light);
+      padding: calc(var(--u) * 2) 0 calc(var(--u) * 2) calc(var(--u) * 3);
+      position: relative;
+    }
+
+    .hour.now .hour-slot::before {
+      content: '';
+      position: absolute;
+      left: -4px;
+      top: 18px;
+      width: 7px;
+      height: 7px;
+      background: var(--accent);
+      border-radius: 50%;
+    }
+
+    /* Events */
+    .event {
+      padding: calc(var(--u) * 2);
+      margin: 0 calc(-1 * var(--u) * 2);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+      border: 1px solid transparent;
+    }
+
+    .event:hover {
+      background: var(--accent-light);
+      border-color: var(--border-light);
+    }
+
+    .event.active {
+      background: var(--bg-active);
+      border-color: var(--border);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    .event-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: calc(var(--u) * 2);
+    }
+
+    .event-title {
+      font-weight: 500;
+    }
+
+    .event-right {
+      display: flex;
+      align-items: center;
+      gap: calc(var(--u) * 1);
+      flex-shrink: 0;
+    }
+
+    .event-duration {
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
+
+    .record-btn {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--bg-primary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.12s ease;
+    }
+
+    .record-btn:hover {
+      border-color: var(--accent);
+    }
+
+    .record-btn .rec-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-tertiary);
+      transition: all 0.12s ease;
+    }
+
+    .record-btn:hover .rec-dot {
+      background: var(--accent);
+    }
+
+    .record-btn.recording {
+      border-color: var(--accent);
+      background: var(--accent-subtle);
+    }
+
+    .record-btn.recording .rec-dot {
+      background: var(--accent);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.85); }
+    }
+
+    .event-location {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    /* Participants */
+    .event-participants {
+      display: flex;
+      flex-wrap: wrap;
+      gap: calc(var(--u) * 1);
+      margin-top: calc(var(--u) * 2);
+    }
+
+    .participant {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      background: var(--bg-secondary);
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.12s ease;
+      text-decoration: none;
+    }
+
+    .participant:hover {
+      background: var(--accent-subtle);
+      color: var(--text-primary);
+    }
+
+    .participant-avatar {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    /* Context */
+    .event-context {
+      margin-top: calc(var(--u) * 2);
+      padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
+      background: var(--accent-subtle);
+      border-radius: 4px;
+      border-left: 2px solid var(--accent);
+    }
+
+    .context-line {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 3px;
+    }
+
+    .context-line:last-child { margin-bottom: 0; }
+
+    .context-icon {
+      color: var(--accent);
+      font-size: 11px;
+    }
+
+    /* Notes */
+    .event-notes {
+      margin-top: calc(var(--u) * 2);
+      padding-top: calc(var(--u) * 2);
+      border-top: 1px solid var(--border-light);
+    }
+
+    .notes-field {
+      width: 100%;
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-family: var(--font);
+      font-size: 13px;
+      color: var(--text-primary);
+      line-height: 1.6;
+      resize: none;
+      outline: none;
+    }
+
+    .notes-field::placeholder {
+      color: var(--text-tertiary);
+    }
+
+    .empty {
+      padding: calc(var(--u) * 2) 0;
+      font-size: 12px;
+      color: var(--text-tertiary);
+      opacity: 0;
+      transition: opacity 0.12s ease;
+      cursor: pointer;
+    }
+
+    .hour-slot:hover .empty { opacity: 1; }
+
+    /* ==================== FOOTER ==================== */
+    .footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: calc(var(--u) * 1.5) calc(var(--u) * 4);
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: center;
+      gap: calc(var(--u) * 4);
+    }
+
+    .footer-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
+
+    /* ==================== SCROLLBAR ==================== */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="inbox">
+      <div class="inbox-header">
+        <div class="label">Inbox</div>
+      </div>
+      <div class="inbox-list">
+        <div class="item selected unread">
+          <div class="dot"></div>
+          <div class="item-body">
+            <div class="item-from">Sarah Chen</div>
+            <div class="item-subject">RE: Q4 follow-up numbers</div>
+            <div class="item-meta">needs reply · board prep</div>
+            <div class="item-actions">
+              <span class="hint"><span class="kbd">S</span> schedule</span>
+              <span class="hint"><span class="kbd">R</span> reply</span>
+              <span class="hint"><span class="kbd">X</span> archive</span>
+            </div>
+          </div>
+          <div class="item-time">2h</div>
+        </div>
+
+        <div class="item unread">
+          <div class="dot"></div>
+          <div class="item-body">
+            <div class="item-from">#engineering</div>
+            <div class="item-subject">@you: deploy question</div>
+            <div class="item-meta">slack · awaiting</div>
+          </div>
+          <div class="item-time">4h</div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="item-body">
+            <div class="item-from">Draft: Board update</div>
+            <div class="item-subject">January board update</div>
+            <div class="item-meta">ready for review</div>
+          </div>
+          <div class="item-time">1d</div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="item-body">
+            <div class="item-from">Nick Stocks</div>
+            <div class="item-subject">Partnership proposal</div>
+            <div class="item-meta">needs decision</div>
+          </div>
+          <div class="item-time">1d</div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="item-body">
+            <div class="item-from">Jens Kegelmann</div>
+            <div class="item-subject">Compound systems</div>
+            <div class="item-meta">slack · follow up</div>
+          </div>
+          <div class="item-time">1d</div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="item-body">
+            <div class="item-from">Investor Relations</div>
+            <div class="item-subject">March board deck</div>
+            <div class="item-meta">review requested</div>
+          </div>
+          <div class="item-time">2d</div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="calendar">
+      <div class="calendar-header">
+        <div class="label">Today</div>
+        <div class="calendar-date">Monday, January 27</div>
+      </div>
+      <div class="timeline">
+        <div class="hour now">
+          <div class="hour-time">09:00</div>
+          <div class="hour-slot">
+            <div class="event active">
+              <div class="event-top">
+                <div>
+                  <div class="event-title">1:1 with Sarah Chen</div>
+                  <div class="event-location">Google Meet · Board prep</div>
+                </div>
+                <div class="event-right">
+                  <span class="event-duration">30m</span>
+                  <button class="record-btn recording" title="Recording in progress">
+                    <span class="rec-dot"></span>
+                  </button>
+                </div>
+              </div>
+              
+              <div class="event-participants">
+                <a href="#" class="participant">
+                  <span class="participant-avatar">SC</span>
+                  Sarah Chen
+                </a>
+                <a href="#" class="participant">
+                  <span class="participant-avatar">MW</span>
+                  You
+                </a>
+              </div>
+
+              <div class="event-context">
+                <div class="context-line"><span class="context-icon">→</span> Open thread: Q4 numbers (2d waiting)</div>
+                <div class="context-line"><span class="context-icon">↺</span> Last met Jan 15, board strategy</div>
+                <div class="context-line"><span class="context-icon">◆</span> Prefers concise slides</div>
+              </div>
+
+              <div class="event-notes">
+                <textarea class="notes-field" rows="2" placeholder="Notes...">- Discuss Q4 revenue variance
+- Align on board narrative</textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">10:00</div>
+          <div class="hour-slot">
+            <div class="event">
+              <div class="event-top">
+                <div>
+                  <div class="event-title">Focus block</div>
+                  <div class="event-location">Deep work</div>
+                </div>
+                <div class="event-right">
+                  <span class="event-duration">90m</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">11:30</div>
+          <div class="hour-slot">
+            <div class="empty">+ add</div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">12:00</div>
+          <div class="hour-slot">
+            <div class="event">
+              <div class="event-top">
+                <div>
+                  <div class="event-title">Lunch with Marcus</div>
+                  <div class="event-location">Brasserie Colette</div>
+                </div>
+                <div class="event-right">
+                  <span class="event-duration">60m</span>
+                  <button class="record-btn" title="Start recording">
+                    <span class="rec-dot"></span>
+                  </button>
+                </div>
+              </div>
+              <div class="event-participants">
+                <a href="#" class="participant">
+                  <span class="participant-avatar">MH</span>
+                  Marcus Henke
+                </a>
+                <a href="#" class="participant">
+                  <span class="participant-avatar">MW</span>
+                  You
+                </a>
+              </div>
+              <div class="event-context">
+                <div class="context-line"><span class="context-icon">◆</span> Co-founder, product roadmap</div>
+                <div class="context-line"><span class="context-icon">↺</span> Last catch-up 2 weeks ago</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">14:00</div>
+          <div class="hour-slot">
+            <div class="event">
+              <div class="event-top">
+                <div>
+                  <div class="event-title">SLT Weekly</div>
+                  <div class="event-location">Conference Room A</div>
+                </div>
+                <div class="event-right">
+                  <span class="event-duration">60m</span>
+                  <button class="record-btn" title="Start recording">
+                    <span class="rec-dot"></span>
+                  </button>
+                </div>
+              </div>
+              <div class="event-participants">
+                <a href="#" class="participant">
+                  <span class="participant-avatar">+5</span>
+                  5 attendees
+                </a>
+              </div>
+              <div class="event-context">
+                <div class="context-line"><span class="context-icon">→</span> Agenda: Q1 planning, hiring</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">15:00</div>
+          <div class="hour-slot">
+            <div class="empty">+ add</div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">16:00</div>
+          <div class="hour-slot">
+            <div class="event">
+              <div class="event-top">
+                <div>
+                  <div class="event-title">Product Review</div>
+                  <div class="event-location">Engineering team</div>
+                </div>
+                <div class="event-right">
+                  <span class="event-duration">45m</span>
+                  <button class="record-btn" title="Start recording">
+                    <span class="rec-dot"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hour">
+          <div class="hour-time">17:00</div>
+          <div class="hour-slot">
+            <div class="empty">+ add</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="footer">
+    <span class="footer-item"><span class="kbd">⌘K</span> command</span>
+    <span class="footer-item"><span class="kbd">J</span> <span class="kbd">K</span> navigate</span>
+    <span class="footer-item"><span class="kbd">S</span> schedule</span>
+    <span class="footer-item"><span class="kbd">R</span> reply</span>
+    <span class="footer-item"><span class="kbd">X</span> archive</span>
+  </footer>
+
+  <script>
+    let idx = 0, evtIdx = 0, panel = 'inbox';
+    const items = document.querySelectorAll('.item');
+    const events = document.querySelectorAll('.event');
+    const recordBtns = document.querySelectorAll('.record-btn');
+
+    const sync = () => {
+      items.forEach((el, i) => el.classList.toggle('selected', i === idx));
+      events.forEach((el, i) => el.classList.toggle('active', i === evtIdx));
+    };
+
+    recordBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        btn.classList.toggle('recording');
+        btn.title = btn.classList.contains('recording') ? 'Recording in progress' : 'Start recording';
+      });
+    });
+
+    document.addEventListener('keydown', e => {
+      if (['TEXTAREA','INPUT'].includes(e.target.tagName)) return;
+      if (e.key === 'j') { e.preventDefault(); panel === 'inbox' ? idx = Math.min(idx+1, items.length-1) : evtIdx = Math.min(evtIdx+1, events.length-1); sync(); }
+      if (e.key === 'k') { e.preventDefault(); panel === 'inbox' ? idx = Math.max(idx-1, 0) : evtIdx = Math.max(evtIdx-1, 0); sync(); }
+      if (e.key === 'Tab') { e.preventDefault(); panel = panel === 'inbox' ? 'calendar' : 'inbox'; document.querySelector('.inbox').style.opacity = panel === 'inbox' ? 1 : 0.5; document.querySelector('.calendar').style.opacity = panel === 'calendar' ? 1 : 0.5; }
+    });
+
+    items.forEach((el, i) => el.addEventListener('click', () => { idx = i; panel = 'inbox'; sync(); }));
+    events.forEach((el, i) => el.addEventListener('click', () => { evtIdx = i; panel = 'calendar'; sync(); }));
+
+    sync();
+  </script>
+</body>
+</html>
