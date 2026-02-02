@@ -382,7 +382,8 @@ export class TemporalDriftView extends ItemView {
         }
 
         // Notes textarea (inline edit of the indented block)
-        const notes = card.createDiv({ cls: "event-notes" });
+        const bodyWrap = card.createDiv({ cls: "event-body" });
+        const notes = bodyWrap.createDiv({ cls: "event-notes" });
         const textarea = notes.createEl("textarea", {
           cls: "notes-field",
           attr: { rows: "2", placeholder: "Notes..." },
