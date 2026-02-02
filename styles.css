@@ -679,7 +679,7 @@
 
 /* Hard reset within the view to avoid Obsidian/theme defaults breaking alignment */
 .temporal-drift-view.td-prototype * { box-sizing: border-box; }
-.temporal-drift-view.td-prototype textarea { margin: 0; }
+.temporal-drift-view.td-prototype textarea { margin: 0; padding: 0; }
 .temporal-drift-view.td-prototype a { text-decoration: none; }
 
 .temporal-drift-view.td-prototype .calendar {
@@ -784,6 +784,15 @@
 }
 
 .temporal-drift-view.td-prototype .event-title { font-weight: 500; }
+
+/* Title/body left-edge alignment (no drift from theme defaults) */
+.temporal-drift-view.td-prototype .event-title,
+.temporal-drift-view.td-prototype .event-location,
+.temporal-drift-view.td-prototype .event-notes,
+.temporal-drift-view.td-prototype .notes-field {
+  margin-left: 0;
+  padding-left: 0;
+}
 
 .temporal-drift-view.td-prototype .event-right {
   display: flex;
