@@ -40,9 +40,19 @@ function getInitials(name: string): string {
 }
 
 function parseWikilinkDisplay(raw: string): { target: string; display: string } {
-  // raw: "Foo|Bar" or "Foo"
-  const [target, display] = raw.split("|");
-  return { target: (target ?? raw).trim(), display: (display ?? target ?? raw).trim() };
+  // raw: "path/to/File|Display" or "path/to/File".
+  // If display is missing, use the last path segment.
+  const match = raw.match(/^([^|]+)(?:\|(.+))?$/);
+  const target = (match?.[1] ?? raw).trim();
+  const display = (match?.[2] ?? target.split("/").pop() ?? target).trim();
+  return { target, display };
+}
+
+function stripWikilinks(text: string): string {
+  return text.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, p1: string, p2: string | undefined) => {
+    const display = (p2 ?? p1.split("/").pop() ?? p1).trim();
+    return display;
+  });
 }
 
 function extractParticipants(head: string): Array<{ target: string; display: string }> {
@@ -305,22 +315,31 @@ export class TemporalDriftView extends ItemView {
         const top = card.createDiv({ cls: "event-top" });
         const left = top.createDiv();
 
-        // Title + location placeholder
+        // Title + location (prototype-style)
         const titleText = (() => {
           const link = extractPrimaryLink(entry.head);
           if (link) return link.display;
+
           if (entry.type === "task") {
             const m = entry.head.match(/\[\[([^\]]+)\]\]/);
             if (m) return parseWikilinkDisplay(m[1]).display;
           }
-          return entry.head || "(empty)";
+
+          return stripWikilinks(entry.head || "(empty)");
         })();
 
         left.createDiv({ cls: "event-title", text: titleText });
 
-        // For now: show the raw head as "location" line (prototype placeholder)
-        if (entry.head) {
-          left.createDiv({ cls: "event-location", text: entry.head });
+        // Location line: show the head *minus* the primary link, with wikilinks cleaned.
+        // This avoids rendering raw [[...]] strings.
+        const locationText = (() => {
+          if (!entry.head) return "";
+          const withoutPrimary = entry.head.replace(/^\s*\[\[[^\]]+\]\]\s*/, "").trim();
+          return stripWikilinks(withoutPrimary);
+        })();
+
+        if (locationText) {
+          left.createDiv({ cls: "event-location", text: locationText });
         }
 
         const right = top.createDiv({ cls: "event-right" });
