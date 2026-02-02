@@ -20,15 +20,15 @@ import { TemporalDriftSettings } from "../types";
 type Participant = { target: string; display: string };
 
 type TimelineEntry = {
-  from: number; // doc offset
-  to: number; // doc offset (end of replaced block)
-  lineFrom: number; // line start offset
-  time: string; // HH:mm
+  from: number;
+  to: number;
+  lineFrom: number;
+  time: string;
   title: string;
   locationText: string;
   participants: Participant[];
-  bodyLines: string[]; // stripped of leading indentation
-  raw: string; // used for widget equality
+  bodyLines: string[];
+  raw: string;
 };
 
 const TIME_LINE_RE = /^(\d{2}):(\d{2})\s+(.*)$/;
@@ -39,7 +39,6 @@ function stripEventIdSuffix(title: string): string {
 }
 
 function parseWikilinkDisplay(raw: string): { target: string; display: string } {
-  // raw: "path/to/File|Display" or "path/to/File".
   const match = raw.match(/^([^|]+)(?:\|(.+))?$/);
   const target = (match?.[1] ?? raw).trim();
   const display = (match?.[2] ?? target.split("/").pop() ?? target).trim();
@@ -105,11 +104,9 @@ class TimelineCardWidget extends WidgetType {
     top.className = "event-top";
 
     const left = document.createElement("div");
-
     const title = document.createElement("div");
     title.className = "event-title";
     title.textContent = this.entry.title;
-
     left.appendChild(title);
 
     if (this.entry.locationText) {
@@ -121,14 +118,8 @@ class TimelineCardWidget extends WidgetType {
 
     const right = document.createElement("div");
     right.className = "event-right";
-    const duration = document.createElement("span");
-    duration.className = "event-duration";
-    duration.textContent = "";
-    right.appendChild(duration);
-
     top.appendChild(left);
     top.appendChild(right);
-
     card.appendChild(top);
 
     if (this.entry.participants.length > 0) {
@@ -147,7 +138,6 @@ class TimelineCardWidget extends WidgetType {
         a.appendChild(av);
         a.appendChild(document.createTextNode(p.display));
 
-        // Let Obsidian handle link open on click by placing cursor near link.
         a.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -157,15 +147,12 @@ class TimelineCardWidget extends WidgetType {
 
         pWrap.appendChild(a);
       }
-
       card.appendChild(pWrap);
     }
 
     if (this.entry.bodyLines.length > 0) {
       const body = document.createElement("div");
       body.className = "event-body";
-
-      // Render the body as a simple text block (preview only).
       const pre = document.createElement("div");
       pre.className = "event-body-text";
       pre.textContent = this.entry.bodyLines
@@ -173,19 +160,15 @@ class TimelineCardWidget extends WidgetType {
         .slice(0, 3)
         .map(stripWikilinks)
         .join("\n");
-
       body.appendChild(pre);
       card.appendChild(body);
     }
 
     slot.appendChild(card);
-
     hour.appendChild(timeEl);
     hour.appendChild(slot);
-
     root.appendChild(hour);
 
-    // Click anywhere on the card => move cursor to the underlying markdown.
     root.addEventListener("click", (e) => {
       e.preventDefault();
       view.dispatch({ selection: { anchor: this.entry.lineFrom } });
@@ -196,7 +179,6 @@ class TimelineCardWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    // Allow the editor to handle selection/focus, but we also have click handlers.
     return false;
   }
 }
@@ -204,12 +186,10 @@ class TimelineCardWidget extends WidgetType {
 function buildEntriesFromVisibleRanges(view: EditorView): TimelineEntry[] {
   const doc = view.state.doc;
   const entries: TimelineEntry[] = [];
-
   const seenLineFrom = new Set<number>();
 
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
-
     while (pos <= to) {
       const line = doc.lineAt(pos);
       if (seenLineFrom.has(line.from)) {
@@ -226,33 +206,25 @@ function buildEntriesFromVisibleRanges(view: EditorView): TimelineEntry[] {
 
       const time = `${m[1]}:${m[2]}`;
       const head = (m[3] ?? "").trim();
-
-      // Collect the body lines.
       const bodyLines: string[] = [];
       let endLineNo = line.number;
 
       for (let ln = line.number + 1; ln <= doc.lines; ln++) {
         const next = doc.line(ln);
         const text = next.text;
-
         if (IS_TIME_LINE(text)) break;
         if (/^##/.test(text)) break;
-
         if (text.trim() === "") {
           bodyLines.push("");
           endLineNo = ln;
           continue;
         }
-
         if (!/^\s+/.test(text)) break;
-
         bodyLines.push(text.replace(/^\s+/, ""));
         endLineNo = ln;
       }
 
       const endLine = doc.line(endLineNo);
-
-      // Derive title, participants, and a "location" line (prototype-like).
       const primary = extractPrimaryLink(head);
       const participants = extractParticipants(head);
 
@@ -263,15 +235,12 @@ function buildEntriesFromVisibleRanges(view: EditorView): TimelineEntry[] {
       })();
 
       const locationText = (() => {
-        // Remove the leading primary link and the participants list for the location line.
         let t = head;
         t = t.replace(/^\s*\[\[[^\]]+\]\]\s*/, "");
         const withIdx = t.indexOf(" with ");
         if (withIdx >= 0) t = t.slice(0, withIdx);
         return stripWikilinks(t).trim();
       })();
-
-      const raw = [line.text, ...bodyLines].join("\n");
 
       entries.push({
         from: line.from,
@@ -282,82 +251,73 @@ function buildEntriesFromVisibleRanges(view: EditorView): TimelineEntry[] {
         locationText,
         participants,
         bodyLines,
-        raw,
+        raw: [line.text, ...bodyLines].join("\n"),
       });
 
       pos = endLine.to + 1;
     }
   }
-
   return entries;
 }
 
 function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
-  // Wrap everything in try-catch to prevent blocking file opens
+  // Wrap EVERYTHING in try-catch as final safety
   try {
-    // Early bail if view isn't ready
-    if (!view.state || !view.dom) {
+    // Guard: view must be ready with visible ranges
+    if (!view.state || !view.visibleRanges?.length) {
       return Decoration.none;
     }
 
-    // Live Preview detection: field (preferred) + DOM fallback.
-    let isLiveField = false;
-    let isLiveDom = false;
+    // Guard: document must have content
+    if (view.state.doc.length === 0) {
+      return Decoration.none;
+    }
+
+    // Live Preview detection - check DOM first (safer)
+    let isLive = false;
     try {
-      isLiveField = view.state.field(editorLivePreviewField, false) ?? false;
-      isLiveDom = !!view.dom.closest(".markdown-source-view.is-live-preview");
+      isLive = !!view.dom?.closest(".markdown-source-view.is-live-preview");
+      if (!isLive) {
+        isLive = view.state.field(editorLivePreviewField, false) ?? false;
+      }
     } catch {
-      // Field access failed — view not ready
-      return Decoration.none;
-    }
-    const isLive = isLiveField || isLiveDom;
-
-    // Only in daily notes — safely access editorInfoField
-    let file: { path: string } | null | undefined = null;
-    try {
-      const editorInfo = view.state.field(editorInfoField, false);
-      file = editorInfo?.file;
-    } catch {
-      // Field access failed
-      return Decoration.none;
-    }
-
-    // No file loaded yet (e.g., "New tab" state) — skip silently
-    if (!file?.path) {
       return Decoration.none;
     }
 
     if (!isLive) return Decoration.none;
 
-    const folderPrefix = normalizePath(settings.dailyNotesFolder + "/");
-    const filePath = normalizePath(file.path);
+    // Check file path
+    let filePath: string | null = null;
+    try {
+      const editorInfo = view.state.field(editorInfoField, false);
+      filePath = editorInfo?.file?.path ?? null;
+    } catch {
+      return Decoration.none;
+    }
 
-    if (!filePath.startsWith(folderPrefix)) {
+    if (!filePath) return Decoration.none;
+
+    const folderPrefix = normalizePath(settings.dailyNotesFolder + "/");
+    if (!normalizePath(filePath).startsWith(folderPrefix)) {
       return Decoration.none;
     }
 
     const entries = buildEntriesFromVisibleRanges(view);
     if (entries.length === 0) return Decoration.none;
 
-    // Sort by from; CodeMirror requires ordered ranges.
     entries.sort((a, b) => a.from - b.from);
 
     const builder = new RangeSetBuilder<Decoration>();
     for (const entry of entries) {
-      const widget = new TimelineCardWidget(entry);
-
-      // Replace the entire block (timestamp line + indented children + blank separators).
       builder.add(
         entry.from,
         entry.to,
-        Decoration.replace({ widget, block: true })
+        Decoration.replace({ widget: new TimelineCardWidget(entry), block: true })
       );
     }
 
     return builder.finish();
   } catch (e) {
-    // Silently fail — never block file opens
-    // eslint-disable-next-line no-console
     console.warn("[TD] buildDecorations error:", e);
     return Decoration.none;
   }
@@ -366,20 +326,44 @@ function buildDecorations(view: EditorView, settings: TemporalDriftSettings): De
 function createTimelineLivePreview(settings: TemporalDriftSettings): Extension {
   return ViewPlugin.fromClass(
     class TimelineLivePreviewPlugin {
-      decorations: DecorationSet;
+      decorations: DecorationSet = Decoration.none;
 
-      constructor(view: EditorView) {
-        this.decorations = buildDecorations(view, settings);
+      constructor(_view: EditorView) {
+        // CRITICAL: Do NOT call buildDecorations here!
+        // editorInfoField is not ready during file open.
+        // Decorations will be built on first update.
       }
 
       update(update: ViewUpdate): void {
-        if (update.docChanged || update.viewportChanged) {
+        // Skip if view isn't ready (no document content)
+        if (!update.view.state?.doc?.length) {
+          return;
+        }
+        
+        // Skip if no visible ranges (view not rendered)
+        if (!update.view.visibleRanges?.length) {
+          return;
+        }
+        
+        // Determine if we should rebuild
+        const shouldRebuild = update.docChanged || 
+                              update.viewportChanged || 
+                              (this.decorations === Decoration.none && update.view.state.doc.length > 10);
+        
+        if (!shouldRebuild) {
+          return;
+        }
+        
+        try {
           this.decorations = buildDecorations(update.view, settings);
+        } catch (e) {
+          console.warn("[TD] live preview update error:", e);
+          this.decorations = Decoration.none;
         }
       }
     },
     {
-      decorations: (v) => v.decorations,
+      decorations: (v) => v.decorations ?? Decoration.none,
     }
   );
 }
