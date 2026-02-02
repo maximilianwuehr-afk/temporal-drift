@@ -102,7 +102,7 @@ export default class TemporalDriftPlugin extends Plugin {
 
     // Register protocol handlers
     registerProtocolHandlers(
-      this.app,
+      this,
       this.dailyNoteService,
       () => this.activateView()
     );
