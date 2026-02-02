@@ -674,6 +674,11 @@
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'tnum';
 }
 
+/* Hard reset within the view to avoid Obsidian/theme defaults breaking alignment */
+.temporal-drift-view.td-prototype * { box-sizing: border-box; }
+.temporal-drift-view.td-prototype textarea { margin: 0; }
+.temporal-drift-view.td-prototype a { text-decoration: none; }
+
 .temporal-drift-view.td-prototype .calendar {
   background: var(--bg-primary);
   display: flex;
