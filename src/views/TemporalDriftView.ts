@@ -80,7 +80,8 @@ function parseDailyNote(content: string): { thankful?: string; focus?: string; e
   const thankfulLines: string[] = [];
   const focusLines: string[] = [];
 
-  const isTimeLine = (line: string) => /^\d{2}:\d{2}\b/.test(line);
+  // Timeline entries must be "HH:mm <space>..." (matches your daily note format)
+  const isTimeLine = (line: string) => /^\d{2}:\d{2}\s/.test(line);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -101,6 +102,12 @@ function parseDailyNote(content: string): { thankful?: string; focus?: string; e
       continue;
     }
 
+    // Focus/Thankful sections end implicitly once timeline entries start
+    if (isTimeLine(line)) {
+      inThankful = false;
+      inFocus = false;
+    }
+
     if (inThankful) {
       if (line.trim()) thankfulLines.push(line.trim());
       continue;
@@ -110,7 +117,7 @@ function parseDailyNote(content: string): { thankful?: string; focus?: string; e
       continue;
     }
 
-    const timeMatch = line.match(/^(\d{2}):(\d{2})\s*(.*)$/);
+    const timeMatch = line.match(/^(\d{2}):(\d{2})\s+(.*)$/);
     if (!timeMatch) continue;
 
     const time = `${timeMatch[1]}:${timeMatch[2]}`;
@@ -124,14 +131,17 @@ function parseDailyNote(content: string): { thankful?: string; focus?: string; e
       // Stop at next top-level heading to avoid eating sections below.
       if (next.match(/^##/)) break;
 
-      // Accept indented continuation lines. We store trimmed-left content.
+      // Only indented lines belong to this entry (blank lines allowed)
       if (next.trim() === "") {
-        // keep blank lines as separators
         body.push("");
-      } else {
-        body.push(next.replace(/^\s+/, ""));
+        j++;
+        continue;
+      }
+      if (!/^\s+/.test(next)) {
+        break;
       }
 
+      body.push(next.replace(/^\s+/, ""));
       j++;
     }
 
@@ -431,7 +441,7 @@ export class TemporalDriftView extends ItemView {
     const lines = content.split("\n");
 
     // Find the next time line after this entry
-    const isTimeLine = (line: string) => /^\d{2}:\d{2}\b/.test(line);
+    const isTimeLine = (line: string) => /^\d{2}:\d{2}\s/.test(line);
 
     let end = entry.lineNo + 1;
     while (end < lines.length) {
