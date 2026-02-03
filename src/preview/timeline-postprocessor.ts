@@ -27,8 +27,8 @@ type ParsedEntry = {
   bodyLines: string[];
 };
 
-const TIME_LINE_RE = /^(\d{2}):(\d{2})\s+(.*)$/;
-const IS_TIME_LINE = (line: string) => /^\d{2}:\d{2}\s/.test(line);
+const TIME_LINE_RE = /^\s*(?:[-*+]\s+)?(\d{2}):(\d{2})\s+(.*)$/;
+const IS_TIME_LINE = (line: string) => /^\s*(?:[-*+]\s+)?\d{2}:\d{2}\s/.test(line);
 
 function parseWikilinkDisplay(raw: string): { target: string; display: string } {
   const match = raw.match(/^([^|]+)(?:\|(.+))?$/);
@@ -294,11 +294,12 @@ export function registerTimelinePostProcessor(plugin: TemporalDriftPlugin): void
       return false;
     };
 
-    // Walk direct children as "blocks"; use section info to map to source lines.
-    // We iterate over a static array because we will remove/replace.
-    const children = Array.from(el.children);
+    // Walk candidate blocks. In preview mode, timeline entries may render inside list items,
+    // so we search for li/p elements first; fallback to direct children.
+    const candidates = Array.from(el.querySelectorAll("li, p"));
+    const blocks = candidates.length > 0 ? candidates : Array.from(el.children);
 
-    for (const child of children) {
+    for (const child of blocks) {
       const info = ctx.getSectionInfo(child as HTMLElement);
       if (!info) continue;
 
