@@ -14,6 +14,7 @@ import { registerCommands } from "./commands";
 import { formatDate, formatTime } from "./utils/time";
 import { TemporalDriftView, VIEW_TYPE_TEMPORAL_DRIFT } from "./views/TemporalDriftView";
 import { registerTimelinePostProcessor } from "./preview/timeline-postprocessor";
+import { registerOpenTrigger } from "./automation/open-trigger";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
@@ -44,6 +45,10 @@ export default class TemporalDriftPlugin extends Plugin {
 
     // Reading view (Preview) renderer for timeline cards
     registerTimelinePostProcessor(this);
+
+    // Reliable remote file open trigger (bypasses Quick Switcher + obsidian://open flakiness)
+    // External automation writes a vault-relative path into this file.
+    registerOpenTrigger(this.app, { controlPath: ".obsidian/temporal-drift-open.txt" });
 
     // Register settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
