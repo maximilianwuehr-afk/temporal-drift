@@ -48,7 +48,8 @@ export default class TemporalDriftPlugin extends Plugin {
 
     // Reliable remote file open trigger (bypasses Quick Switcher + obsidian://open flakiness)
     // External automation writes a vault-relative path into this file.
-    registerOpenTrigger(this.app, { controlPath: ".obsidian/temporal-drift-open.txt" });
+    // NOTE: Do NOT place this under `.obsidian/` — Obsidian sometimes ignores that folder for vault file events.
+    registerOpenTrigger(this.app, { controlPath: "Temporal Drift/open.txt" });
 
     // Register settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
@@ -84,6 +85,7 @@ export default class TemporalDriftPlugin extends Plugin {
     // Usage: obsidian://td-open?vault=wuehr&path=Daily%20notes%2F2027-01-01.md
     this.registerObsidianProtocolHandler("td-open", async (params) => {
       const rawPath = (params.path || params.file || "").toString();
+      new Notice(`TD open: ${rawPath || "(missing)"}`);
       if (!rawPath) {
         new Notice("Temporal Drift: missing path");
         return;

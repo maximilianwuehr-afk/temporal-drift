@@ -54,15 +54,27 @@ export function registerOpenTrigger(app: App, opts: OpenTriggerOptions): void {
     app.workspace.setActiveLeaf(leaf, { focus: true });
   };
 
-  // Ensure the control file exists
+  // Ensure the control file exists (and its parent folder)
   app.workspace.onLayoutReady(async () => {
     const existing = app.vault.getAbstractFileByPath(controlPath);
-    if (!existing) {
-      try {
-        await app.vault.create(controlPath, "");
-      } catch {
-        // ignore (folder might not exist / permissions)
+    if (existing) return;
+
+    const parts = controlPath.split("/");
+    if (parts.length > 1) {
+      const folder = parts.slice(0, -1).join("/");
+      if (!app.vault.getAbstractFileByPath(folder)) {
+        try {
+          await app.vault.createFolder(folder);
+        } catch {
+          // ignore
+        }
       }
+    }
+
+    try {
+      await app.vault.create(controlPath, "");
+    } catch {
+      // ignore
     }
   });
 
@@ -74,6 +86,10 @@ export function registerOpenTrigger(app: App, opts: OpenTriggerOptions): void {
     const content = await app.vault.read(file);
     // first non-empty line wins
     const line = content.split(/\r?\n/).find((l) => l.trim().length > 0) || "";
+
+    // Visual confirmation that the trigger fired (useful for remote debugging)
+    new Notice(`TD open-trigger: ${line || "(empty)"}`);
+
     await tryOpen(line);
   });
 }
