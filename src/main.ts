@@ -2,7 +2,7 @@
 // Temporal Drift - Main Plugin Entry
 // ============================================================================
 
-import { Plugin, MarkdownView, Notice, TFile, normalizePath } from "obsidian";
+import { Plugin, TFile, normalizePath } from "obsidian";
 import { Extension } from "@codemirror/state";
 
 import { DEFAULT_SETTINGS, TemporalDriftSettings } from "./types";
@@ -12,14 +12,13 @@ import { TimelineLivePreviewExtension } from "./editor/timeline-live-preview";
 import { AutoTimestampExtension } from "./editor/auto-timestamp";
 import { registerCommands } from "./commands";
 import { formatDate, formatTime } from "./utils/time";
-import { TemporalDriftView, VIEW_TYPE_TEMPORAL_DRIFT } from "./views/TemporalDriftView";
 import { registerTimelinePostProcessor } from "./preview/timeline-postprocessor";
 import { registerOpenTrigger } from "./automation/open-trigger";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
 
-  // Last daily note the user was looking at (used when opening the custom view)
+  // Legacy compatibility for view module (view is no longer registered).
   lastActiveDailyNotePath: string | null = null;
 
   private autoTimestamp: AutoTimestampExtension | null = null;
@@ -27,119 +26,23 @@ export default class TemporalDriftPlugin extends Plugin {
   private timelineLivePreview: TimelineLivePreviewExtension | null = null;
 
   async onload() {
-    console.log("Loading Temporal Drift plugin");
-
-    // Load settings
     await this.loadSettings();
 
-    // Initialize extensions
     this.autoTimestamp = new AutoTimestampExtension(this.settings);
     this.timeline = new TimelineExtension(this.settings);
     this.timelineLivePreview = new TimelineLivePreviewExtension(this.settings);
 
-    // Register CM6 extensions (raw editor mode)
+    // Markdown-first: all core UX lives in editor/preview extensions, no custom ItemView required.
     this.registerEditorExtension(this.buildEditorExtensions());
-
-    // Register Temporal Drift custom view (legacy)
-    this.registerView(VIEW_TYPE_TEMPORAL_DRIFT, (leaf) => new TemporalDriftView(leaf, this));
-
-    // Reading view (Preview) renderer for timeline cards
     registerTimelinePostProcessor(this);
 
-    // Reliable remote file open trigger (bypasses Quick Switcher + obsidian://open flakiness)
-    // External automation writes a vault-relative path into this file.
-    // NOTE: Do NOT place this under `.obsidian/` — Obsidian sometimes ignores that folder for vault file events.
+    // External automation trigger file (vault-relative)
     registerOpenTrigger(this.app, { controlPath: "Temporal Drift/open.txt" });
 
-    // Register settings tab
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
 
-    // Track last active daily note (so the ItemView can open the correct date)
-    const maybeRememberDailyNote = (file: any) => {
-      if (!file || typeof file.path !== "string") return;
-      const prefix = `${this.settings.dailyNotesFolder}/`;
-      if (!file.path.startsWith(prefix)) return;
-      if (!/^\d{4}-\d{2}-\d{2}\.md$/.test(file.name)) return;
-      this.lastActiveDailyNotePath = file.path;
-    };
-
-    // Seed on startup (active file)
-    maybeRememberDailyNote(this.app.workspace.getActiveFile());
-
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", (leaf) => {
-        const view = leaf?.view;
-        // MarkdownView import avoided here; check shape.
-        const file = (view as any)?.file;
-        maybeRememberDailyNote(file);
-      })
-    );
-
-    this.registerEvent(
-      this.app.workspace.on("file-open", (file) => {
-        maybeRememberDailyNote(file);
-      })
-    );
-
-    // Protocol handler for reliable remote opening (bypasses flaky UI automation)
-    // Usage: obsidian://td-open?vault=wuehr&path=Daily%20notes%2F2027-01-01.md
-    this.registerObsidianProtocolHandler("td-open", async (params) => {
-      const rawPath = (params.path || params.file || "").toString();
-      new Notice(`TD open: ${rawPath || "(missing)"}`);
-      if (!rawPath) {
-        new Notice("Temporal Drift: missing path");
-        return;
-      }
-
-      const decoded = decodeURIComponent(rawPath);
-      const tryPaths = [
-        normalizePath(decoded),
-        normalizePath(decoded.endsWith(".md") ? decoded : decoded + ".md"),
-      ];
-
-      let file: TFile | null = null;
-      for (const p of tryPaths) {
-        const af = this.app.vault.getAbstractFileByPath(p);
-        if (af instanceof TFile) {
-          file = af;
-          break;
-        }
-      }
-
-      // Fallback: search by basename
-      if (!file) {
-        const base = normalizePath(decoded).split("/").pop() || decoded;
-        const baseMd = base.endsWith(".md") ? base : base + ".md";
-        file = this.app.vault.getMarkdownFiles().find((f) => f.path.endsWith("/" + baseMd) || f.path === baseMd) || null;
-      }
-
-      if (!file) {
-        new Notice(`Temporal Drift: file not found: ${decoded}`);
-        return;
-      }
-
-      const leaf = this.app.workspace.getLeaf(true);
-      await leaf.openFile(file, { active: true });
-      this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    });
-
-    // Register commands
     registerCommands(this);
 
-    // Open Temporal Drift view
-    this.addCommand({
-      id: "open-temporal-drift",
-      name: "Open Temporal Drift",
-      callback: async () => {
-        await this.activateView();
-      },
-    });
-
-    this.addRibbonIcon("clock", "Temporal Drift", async () => {
-      await this.activateView();
-    });
-
-    // Quick add timestamp command
     this.addCommand({
       id: "add-timestamp",
       name: "Add timestamp at cursor",
@@ -149,7 +52,6 @@ export default class TemporalDriftPlugin extends Plugin {
       },
     });
 
-    // Create daily note command
     this.addCommand({
       id: "create-daily-note",
       name: "Create daily note",
@@ -164,7 +66,6 @@ export default class TemporalDriftPlugin extends Plugin {
       extensions.push(...this.timeline.getExtension());
     }
 
-    // Live Preview rich cards (only active in Live Preview mode)
     if (this.timelineLivePreview) {
       extensions.push(...this.timelineLivePreview.getExtension());
     }
@@ -183,7 +84,6 @@ export default class TemporalDriftPlugin extends Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
 
-    // Update extensions with new settings
     this.autoTimestamp?.updateSettings(this.settings);
     this.timeline?.updateSettings(this.settings);
     this.timelineLivePreview?.updateSettings(this.settings);
@@ -192,7 +92,8 @@ export default class TemporalDriftPlugin extends Plugin {
   async createDailyNote() {
     const date = new Date();
     const dateStr = formatDate(date);
-    const filename = `${this.settings.dailyNotesFolder}/${dateStr}.md`;
+    const folderPath = normalizePath(this.settings.dailyNotesFolder);
+    const filename = normalizePath(`${folderPath}/${dateStr}.md`);
 
     const template = `# ${dateStr}
 
@@ -204,45 +105,19 @@ export default class TemporalDriftPlugin extends Plugin {
 
 ${formatTime(date)} `;
 
+    const folder = this.app.vault.getAbstractFileByPath(folderPath);
+    if (!folder) {
+      await this.app.vault.createFolder(folderPath);
+    }
+
     const file = this.app.vault.getAbstractFileByPath(filename);
-    if (file) {
+    if (file instanceof TFile) {
       const leaf = this.app.workspace.getLeaf();
-      await leaf.openFile(file as any);
+      await leaf.openFile(file);
     } else {
       const newFile = await this.app.vault.create(filename, template);
       const leaf = this.app.workspace.getLeaf();
       await leaf.openFile(newFile);
     }
-  }
-
-  async activateView(): Promise<void> {
-    // Capture the currently-active daily note BEFORE switching focus to the ItemView.
-    const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    const activeMarkdownFile = activeMarkdownView?.file ?? this.app.workspace.getActiveFile();
-
-    if (activeMarkdownFile) {
-      const prefix = `${this.settings.dailyNotesFolder}/`;
-      if (
-        typeof activeMarkdownFile.path === "string" &&
-        activeMarkdownFile.path.startsWith(prefix) &&
-        /^\d{4}-\d{2}-\d{2}\.md$/.test(activeMarkdownFile.name)
-      ) {
-        this.lastActiveDailyNotePath = activeMarkdownFile.path;
-      }
-    }
-
-    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_TEMPORAL_DRIFT);
-    if (existing.length > 0) {
-      this.app.workspace.revealLeaf(existing[0]);
-      return;
-    }
-
-    const leaf = this.app.workspace.getLeaf(true);
-    await leaf.setViewState({ type: VIEW_TYPE_TEMPORAL_DRIFT, active: true });
-    this.app.workspace.revealLeaf(leaf);
-  }
-
-  onunload() {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_TEMPORAL_DRIFT);
   }
 }
