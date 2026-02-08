@@ -3,31 +3,25 @@
 //
 // In Obsidian Live Preview (editor), replace timestamp blocks with rich cards.
 // Markdown-first: underlying text remains valid markdown.
-// Performance: only scan visibleRanges.
+// Stable rendering: state-field decorations (CM6-safe for block widgets).
 // ============================================================================
 
-import { Extension, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
-import {
-  Decoration,
-  DecorationSet,
-  EditorView,
-  ViewPlugin,
-  ViewUpdate,
-  WidgetType,
-} from "@codemirror/view";
-import { editorInfoField, editorLivePreviewField, normalizePath } from "obsidian";
+import { Extension, RangeSetBuilder, StateField } from "@codemirror/state";
+import { Decoration, DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import { TFile, editorInfoField, editorLivePreviewField, normalizePath } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 import {
   extractParticipants,
   extractPrimaryLink,
   isTimelineLine,
+  parseTaskHead,
   parseTimelineLine,
   stripEventIdSuffix,
   stripWikilinks,
 } from "../parsing/timeline";
 import { formatTime } from "../utils/time";
+import { pathInFolder } from "../utils/folder-match";
 
-const MAX_LOOKBACK_LINES = 50;
 const MAX_BODY_LINES = 8;
 
 type Participant = { target: string; display: string };
@@ -43,6 +37,11 @@ type TimelineEntry = {
   participants: Participant[];
   bodyLines: string[];
   raw: string;
+  kind: "event" | "task" | "note";
+  taskDone: boolean;
+  taskPriority: "now" | "next" | "later" | null;
+  groupLabel: string | null;
+  taskLinkPath: string | null;
 };
 
 function getInitials(name: string): string {
@@ -65,6 +64,28 @@ function focusAdjacentCard(current: HTMLElement, direction: 1 | -1): void {
   const next = cards[nextIdx];
   next.focus();
   next.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function upsertFrontmatterKey(content: string, key: string, value: string): string {
+  const fm = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!fm) {
+    return `---\n${key}: ${value}\n---\n\n${content}`;
+  }
+
+  const block = fm[1];
+  const keyRe = new RegExp(`^${key}\\s*:\\s*.*$`, "m");
+  const nextBlock = keyRe.test(block)
+    ? block.replace(keyRe, `${key}: ${value}`)
+    : `${block}\n${key}: ${value}`;
+
+  return content.replace(fm[0], `---\n${nextBlock}\n---\n`);
+}
+
+function setFirstCheckboxLine(content: string, done: boolean): string {
+  const marker = done ? "x" : " ";
+  const lineRe = /^(\s*-?\s*\[)\s*([xX ]?)\s*(\].*)$/m;
+  if (!lineRe.test(content)) return content;
+  return content.replace(lineRe, `$1${marker}$3`);
 }
 
 class EmptyDailyStateWidget extends WidgetType {
@@ -123,6 +144,51 @@ class TimelineCardWidget extends WidgetType {
     view.focus();
   }
 
+  private syncLinkedTaskStatus(done: boolean): void {
+    if (!this.entry.taskLinkPath) return;
+
+    const app = (window as unknown as { app?: any }).app;
+    if (!app?.vault) return;
+
+    const path = normalizePath(this.entry.taskLinkPath);
+    const af = app.vault.getAbstractFileByPath(path);
+    if (!(af instanceof TFile)) return;
+
+    void app.vault.process(af, (content: string) => {
+      let next = content;
+      next = upsertFrontmatterKey(next, "status", done ? "done" : "open");
+      next = upsertFrontmatterKey(next, "done", done ? "true" : "false");
+      next = setFirstCheckboxLine(next, done);
+      return next;
+    });
+  }
+
+  private toggleTask(view: EditorView): void {
+    if (this.entry.kind !== "task") return;
+
+    const line = view.state.doc.lineAt(this.entry.lineFrom);
+    const parsed = parseTimelineLine(line.text);
+    if (!parsed) return;
+
+    const m = parsed.head.match(/^(-?\s*)\[\s*([xX ]?)\s*\](\s*)(.*)$/);
+    if (!m) return;
+
+    const prefix = m[1] ?? "";
+    const mark = (m[2] ?? "").toLowerCase();
+    const gap = m[3] && m[3].length > 0 ? m[3] : " ";
+    const title = m[4] ?? "";
+
+    const nextMark = mark === "x" ? " " : "x";
+    const nextHead = `${prefix}[${nextMark}]${gap}${title}`;
+
+    const from = line.from + parsed.headStart;
+    view.dispatch({
+      changes: { from, to: line.to, insert: nextHead },
+    });
+    this.syncLinkedTaskStatus(nextMark === "x");
+    view.focus();
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const root = document.createElement("div");
     root.className = "td-live-preview";
@@ -137,8 +203,17 @@ class TimelineCardWidget extends WidgetType {
     const slot = document.createElement("div");
     slot.className = "hour-slot";
 
+    if (this.entry.groupLabel) {
+      const groupLabel = document.createElement("div");
+      groupLabel.className = "event-group-label";
+      groupLabel.textContent = this.entry.groupLabel;
+      slot.appendChild(groupLabel);
+    }
+
     const card = document.createElement("div");
     card.className = "event";
+    if (this.entry.kind === "task") card.classList.add("event--task");
+    if (this.entry.kind === "task" && this.entry.taskDone) card.classList.add("event--task-done");
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `Timeline entry ${this.entry.time}`);
@@ -148,10 +223,37 @@ class TimelineCardWidget extends WidgetType {
 
     const left = document.createElement("div");
 
-    const title = document.createElement("div");
-    title.className = "event-title";
-    title.textContent = this.entry.title;
-    left.appendChild(title);
+    if (this.entry.kind === "task") {
+      const taskRow = document.createElement("div");
+      taskRow.className = "event-task-row";
+
+      const taskToggle = document.createElement("input");
+      taskToggle.className = "event-task-checkbox";
+      taskToggle.type = "checkbox";
+      taskToggle.checked = this.entry.taskDone;
+      taskToggle.setAttribute("aria-label", this.entry.taskDone ? "Mark task as open" : "Mark task as done");
+      taskToggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+      taskToggle.addEventListener("change", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.toggleTask(view);
+      });
+
+      const title = document.createElement("div");
+      title.className = "event-title";
+      title.textContent = this.entry.title;
+
+      taskRow.appendChild(taskToggle);
+      taskRow.appendChild(title);
+      left.appendChild(taskRow);
+    } else {
+      const title = document.createElement("div");
+      title.className = "event-title";
+      title.textContent = this.entry.title;
+      left.appendChild(title);
+    }
 
     if (this.entry.locationText) {
       const loc = document.createElement("div");
@@ -162,6 +264,13 @@ class TimelineCardWidget extends WidgetType {
 
     const right = document.createElement("div");
     right.className = "event-right";
+
+    if (this.entry.kind === "task" && this.entry.taskPriority) {
+      const chip = document.createElement("span");
+      chip.className = `event-priority-chip event-priority-${this.entry.taskPriority}`;
+      chip.textContent = this.entry.taskPriority;
+      right.appendChild(chip);
+    }
 
     const duration = document.createElement("span");
     duration.className = "event-duration";
@@ -220,17 +329,62 @@ class TimelineCardWidget extends WidgetType {
       const body = document.createElement("div");
       body.className = "event-body";
 
-      const pre = document.createElement("div");
-      pre.className = "event-body-text";
-      const nonEmptyBody = this.entry.bodyLines.filter((l) => l.trim().length > 0).map(stripWikilinks);
+      const nonEmptyBody = this.entry.bodyLines.filter((l) => l.trim().length > 0);
       const overflow = nonEmptyBody.length - MAX_BODY_LINES;
       const visible = nonEmptyBody.slice(0, MAX_BODY_LINES);
-      if (overflow > 0) {
-        visible.push(`… +${overflow} more`);
-      }
-      pre.textContent = visible.join("\n");
 
-      body.appendChild(pre);
+      if (this.entry.kind === "task") {
+        const taskList = document.createElement("div");
+        taskList.className = "event-subtasks";
+
+        for (const line of visible) {
+          const item = document.createElement("div");
+          item.className = "event-subtask";
+
+          const parsed = parseTaskHead(line);
+          if (parsed.isTask) {
+            const mark = document.createElement("input");
+            mark.className = "event-subtask-checkbox";
+            mark.type = "checkbox";
+            mark.checked = parsed.done;
+            mark.disabled = true;
+
+            const text = document.createElement("span");
+            text.className = "event-subtask-text";
+            text.textContent = stripWikilinks(parsed.title);
+            if (parsed.done) text.classList.add("event-subtask-text-done");
+
+            item.appendChild(mark);
+            item.appendChild(text);
+          } else {
+            const text = document.createElement("span");
+            text.className = "event-subtask-text";
+            text.textContent = stripWikilinks(line);
+            item.appendChild(text);
+          }
+
+          taskList.appendChild(item);
+        }
+
+        if (overflow > 0) {
+          const more = document.createElement("div");
+          more.className = "event-subtask-more";
+          more.textContent = `… +${overflow} more`;
+          taskList.appendChild(more);
+        }
+
+        body.appendChild(taskList);
+      } else {
+        const pre = document.createElement("div");
+        pre.className = "event-body-text";
+        const textLines = visible.map(stripWikilinks);
+        if (overflow > 0) {
+          textLines.push(`… +${overflow} more`);
+        }
+        pre.textContent = textLines.join("\n");
+        body.appendChild(pre);
+      }
+
       card.appendChild(body);
     }
 
@@ -259,6 +413,12 @@ class TimelineCardWidget extends WidgetType {
         return;
       }
 
+      if (this.entry.kind === "task" && (e.key === "x" || e.key === "X" || e.key === " ")) {
+        e.preventDefault();
+        this.toggleTask(view);
+        return;
+      }
+
       if (e.key === "Enter" || e.key === "e") {
         e.preventDefault();
         this.enterEdit(view);
@@ -274,119 +434,105 @@ class TimelineCardWidget extends WidgetType {
   }
 }
 
-function findNearestTimeLineAbove(doc: EditorView["state"]["doc"], lineNo: number): number | null {
-  for (let offset = 0; offset <= MAX_LOOKBACK_LINES && lineNo - offset >= 1; offset++) {
-    const ln = lineNo - offset;
-    const text = doc.line(ln).text;
-
-    if (isTimelineLine(text)) return ln;
-    if (/^##/.test(text)) break;
-
-    // Stop if this is a non-indented, non-empty line (not part of a block)
-    if (text.trim() !== "" && !/^\s+/.test(text)) break;
-  }
-
-  return null;
-}
-
-function buildEntries(view: EditorView): TimelineEntry[] {
-  const doc = view.state.doc;
+function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
-  const seenLineFrom = new Set<number>();
 
-  for (const { from, to } of view.visibleRanges) {
-    let pos = from;
+  for (let lineNo = 1; lineNo <= doc.lines; lineNo++) {
+    const line = doc.line(lineNo);
+    const parsed = parseTimelineLine(line.text);
+    if (!parsed) continue;
 
-    while (pos <= to) {
-      let line = doc.lineAt(pos);
-      if (line.from > to) break;
+    const time = parsed.timeText;
+    const head = parsed.head;
+    const editPos = head.length > 0 ? line.from + parsed.headStart : line.to;
 
-      // If we're starting inside a block body, jump to nearest timestamp line above.
-      if (!isTimelineLine(line.text)) {
-        const maybeStart = findNearestTimeLineAbove(doc, line.number);
-        if (maybeStart) {
-          line = doc.line(maybeStart);
-          pos = line.from;
-        }
-      }
+    const bodyLines: string[] = [];
+    const rawLines: string[] = [line.text];
+    let endLineNo = line.number;
 
-      if (seenLineFrom.has(line.from)) {
-        pos = line.to + 1;
-        continue;
-      }
-      seenLineFrom.add(line.from);
+    for (let ln = line.number + 1; ln <= doc.lines; ln++) {
+      const next = doc.line(ln);
+      const text = next.text;
 
-      const parsed = parseTimelineLine(line.text);
-      if (!parsed) {
-        pos = line.to + 1;
-        continue;
-      }
+      if (isTimelineLine(text)) break;
+      if (/^##/.test(text)) break;
 
-      const time = parsed.timeText;
-      const head = parsed.head;
-      const editPos = head.length > 0 ? line.from + parsed.headStart : line.to;
-
-      const bodyLines: string[] = [];
-      const rawLines: string[] = [line.text];
-      let endLineNo = line.number;
-
-      for (let ln = line.number + 1; ln <= doc.lines; ln++) {
-        const next = doc.line(ln);
-        const text = next.text;
-
-        if (isTimelineLine(text)) break;
-        if (/^##/.test(text)) break;
-
-        if (text.trim() === "") {
-          bodyLines.push("");
-          rawLines.push(text);
-          endLineNo = ln;
-          continue;
-        }
-
-        if (!/^\s+/.test(text)) break;
-
-        bodyLines.push(text.replace(/^\s+/, ""));
+      if (text.trim() === "") {
+        bodyLines.push("");
         rawLines.push(text);
         endLineNo = ln;
+        continue;
       }
 
-      const endLine = doc.line(endLineNo);
+      if (!/^\s+/.test(text)) break;
 
-      const primary = extractPrimaryLink(head);
-      const participants = extractParticipants(head);
+      bodyLines.push(text.replace(/^\s+/, ""));
+      rawLines.push(text);
+      endLineNo = ln;
+    }
 
-      const title = (() => {
-        if (primary) return stripEventIdSuffix(primary.display);
-        const plain = head.split(" with ")[0];
-        return stripEventIdSuffix(stripWikilinks(plain || "(empty)"));
-      })();
+    const endLine = doc.line(endLineNo);
 
-      const locationText = (() => {
-        if (!primary) return "";
-        let t = head;
-        t = t.replace(/^\s*\[\[[^\]]+\]\]\s*/, "");
-        const withIdx = t.indexOf(" with ");
-        if (withIdx >= 0) t = t.slice(0, withIdx);
-        return stripWikilinks(t).trim();
-      })();
+    const task = parseTaskHead(head);
+    const primary = extractPrimaryLink(head);
+    const participants = task.isTask ? [] : extractParticipants(head);
 
-      const raw = rawLines.join("\n");
+    const taskLinkPath = (() => {
+      if (!task.isTask) return null;
+      const m = head.match(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/);
+      return m?.[1]?.trim() || null;
+    })();
 
-      entries.push({
-        from: line.from,
-        to: endLine.to,
-        lineFrom: line.from,
-        editPos,
-        time,
-        title,
-        locationText,
-        participants,
-        bodyLines,
-        raw,
-      });
+    const kind: "event" | "task" | "note" = task.isTask ? "task" : primary ? "event" : "note";
 
-      pos = endLine.to + 1;
+    const title = (() => {
+      if (task.isTask) {
+        return stripWikilinks(task.title || "(empty task)");
+      }
+      if (primary) return stripEventIdSuffix(primary.display);
+      const plain = head.split(" with ")[0];
+      return stripEventIdSuffix(stripWikilinks(plain || "(empty)"));
+    })();
+
+    const locationText = (() => {
+      if (!primary || task.isTask) return "";
+      let t = head;
+      t = t.replace(/^\s*\[\[[^\]]+\]\]\s*/, "");
+      const withIdx = t.indexOf(" with ");
+      if (withIdx >= 0) t = t.slice(0, withIdx);
+      return stripWikilinks(t).trim();
+    })();
+
+    const raw = rawLines.join("\n");
+
+    entries.push({
+      from: line.from,
+      to: endLine.to,
+      lineFrom: line.from,
+      editPos,
+      time,
+      title,
+      locationText,
+      participants,
+      bodyLines,
+      raw,
+      kind,
+      taskDone: task.done,
+      taskPriority: task.priority,
+      groupLabel: null,
+      taskLinkPath,
+    });
+
+    lineNo = endLineNo;
+  }
+
+  let lastTaskState: boolean | null = null;
+  for (const entry of entries) {
+    if (entry.kind !== "task") continue;
+
+    if (lastTaskState === null || lastTaskState !== entry.taskDone) {
+      entry.groupLabel = entry.taskDone ? "Done tasks" : "Open tasks";
+      lastTaskState = entry.taskDone;
     }
   }
 
@@ -400,24 +546,19 @@ function selectionOverlaps(selection: EditorView["state"]["selection"], from: nu
   return false;
 }
 
-function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
-  const isLiveField = view.state.field(editorLivePreviewField, false);
-  const isLiveDom = !!view.dom.closest(".markdown-source-view.is-live-preview");
-  const isLive = isLiveField || isLiveDom;
-
-  if (!isLive) return Decoration.none;
-
-  const editorInfo = view.state.field(editorInfoField, false);
+function buildDecorationsFromState(state: EditorView["state"], settings: TemporalDriftSettings): DecorationSet {
+  const editorInfo = state.field(editorInfoField, false);
   const file = editorInfo?.file;
-  const folderPrefix = normalizePath(settings.dailyNotesFolder + "/");
   const filePath = file?.path ? normalizePath(file.path) : "";
 
-  if (!filePath || !filePath.startsWith(folderPrefix)) return Decoration.none;
+  if (!filePath || !pathInFolder(filePath, settings.dailyNotesFolder, ["Daily notes"])) {
+    return Decoration.none;
+  }
 
-  const entries = buildEntries(view);
+  const entries = buildEntriesFromDoc(state.doc);
 
   if (entries.length === 0) {
-    const isEmptyDoc = view.state.doc.toString().trim().length === 0;
+    const isEmptyDoc = state.doc.toString().trim().length === 0;
     if (!isEmptyDoc) return Decoration.none;
 
     const builder = new RangeSetBuilder<Decoration>();
@@ -428,7 +569,7 @@ function buildDecorations(view: EditorView, settings: TemporalDriftSettings): De
   entries.sort((a, b) => a.from - b.from);
 
   const builder = new RangeSetBuilder<Decoration>();
-  const selection = view.state.selection;
+  const selection = state.selection;
 
   for (const entry of entries) {
     // If selection is inside entry, keep raw markdown visible for editing.
@@ -441,56 +582,27 @@ function buildDecorations(view: EditorView, settings: TemporalDriftSettings): De
 }
 
 function createTimelineLivePreview(settings: TemporalDriftSettings): Extension {
-  const setTimelineDecorations = StateEffect.define<DecorationSet>();
-
-  const timelineDecorationsField = StateField.define<DecorationSet>({
-    create: () => Decoration.none,
-    update(value, tr) {
-      for (const effect of tr.effects) {
-        if (effect.is(setTimelineDecorations)) return effect.value;
-      }
-      return value;
+  return StateField.define<DecorationSet>({
+    create(state) {
+      return buildDecorationsFromState(state, settings);
     },
-  });
-
-  const syncPlugin = ViewPlugin.fromClass(
-    class TimelineLivePreviewSyncPlugin {
-      private scheduled = false;
-      private nextDecorations: DecorationSet | null = null;
-
-      constructor(private view: EditorView) {
-        this.scheduleSync();
-      }
-
-      update(update: ViewUpdate): void {
-        if (update.docChanged || update.viewportChanged || update.selectionSet) {
-          this.scheduleSync();
+    update(_value, tr) {
+      if (!tr.docChanged && !tr.selection) {
+        const hadLivePreviewField = tr.startState.field(editorLivePreviewField, false);
+        const hasLivePreviewField = tr.state.field(editorLivePreviewField, false);
+        if (hadLivePreviewField === hasLivePreviewField) {
+          const beforePath = tr.startState.field(editorInfoField, false)?.file?.path ?? "";
+          const afterPath = tr.state.field(editorInfoField, false)?.file?.path ?? "";
+          if (beforePath === afterPath) {
+            return _value;
+          }
         }
       }
 
-      private scheduleSync(): void {
-        this.nextDecorations = buildDecorations(this.view, settings);
-        if (this.scheduled) return;
-
-        this.scheduled = true;
-        queueMicrotask(() => {
-          this.scheduled = false;
-          if (!this.nextDecorations) return;
-
-          const next = this.nextDecorations;
-          this.nextDecorations = null;
-
-          try {
-            this.view.dispatch({ effects: setTimelineDecorations.of(next) });
-          } catch {
-            // View might be gone during shutdown/reconfiguration.
-          }
-        });
-      }
-    }
-  );
-
-  return [timelineDecorationsField, EditorView.decorations.from(timelineDecorationsField), syncPlugin];
+      return buildDecorationsFromState(tr.state, settings);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
 }
 
 export class TimelineLivePreviewExtension {

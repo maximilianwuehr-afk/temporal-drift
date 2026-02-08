@@ -12,6 +12,7 @@ import { keymap, EditorView } from "@codemirror/view";
 import { editorInfoField } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 import { formatTime } from "../utils/time";
+import { pathInFolder } from "../utils/folder-match";
 
 export function createAutoTimestampExtension(settings: TemporalDriftSettings): Extension {
   return keymap.of([
@@ -28,7 +29,7 @@ export function createAutoTimestampExtension(settings: TemporalDriftSettings): E
         }
 
         // Only apply inside the daily notes folder
-        if (!file?.path || !file.path.startsWith(settings.dailyNotesFolder)) {
+        if (!file?.path || !pathInFolder(file.path, settings.dailyNotesFolder, ["Daily notes"])) {
           return false;
         }
 
