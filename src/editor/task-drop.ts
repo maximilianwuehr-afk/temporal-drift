@@ -1,11 +1,36 @@
-import { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { Extension, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import { editorInfoField } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 import { parseTimelineLine } from "../parsing/timeline";
 import { formatTime } from "../utils/time";
 import { pathInFolder } from "../utils/folder-match";
+
 const TD_TASK_MIME = "application/x-temporal-drift-task";
+
+type DropHint = { lineFrom: number; className: string };
+
+const setDropHintEffect = StateEffect.define<DropHint | null>();
+
+const dropHintField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, tr) {
+    let next = value.map(tr.changes);
+
+    for (const e of tr.effects) {
+      if (e.is(setDropHintEffect)) {
+        if (!e.value) return Decoration.none;
+        const deco = Decoration.line({ class: e.value.className }).range(e.value.lineFrom);
+        return Decoration.set([deco], true);
+      }
+    }
+
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 type DragTaskPayload = {
   path: string;
@@ -47,14 +72,39 @@ function getDropPayload(e: DragEvent): DragTaskPayload | null {
   return null;
 }
 
-function currentLineTimeOrNow(view: EditorView, pos: number): string {
-  const line = view.state.doc.lineAt(pos);
-  const parsed = parseTimelineLine(line.text);
-  if (!parsed) return formatTime(new Date());
-
+function extractStartTime(text: string): string | null {
+  const parsed = parseTimelineLine(text);
+  if (!parsed) return null;
   const time = parsed.timeText;
   const rangeSplit = time.split("–")[0]?.trim();
-  return rangeSplit || formatTime(new Date());
+  return rangeSplit || null;
+}
+
+function findClosestSlotTime(view: EditorView, pos: number): string {
+  const doc = view.state.doc;
+  const centerLine = doc.lineAt(pos).number;
+
+  // Prefer exact line match first.
+  const current = extractStartTime(doc.line(centerLine).text);
+  if (current) return current;
+
+  // Otherwise search outward for the nearest timestamp line.
+  const MAX_SCAN = 80;
+  for (let d = 1; d <= MAX_SCAN; d++) {
+    const up = centerLine - d;
+    if (up >= 1) {
+      const t = extractStartTime(doc.line(up).text);
+      if (t) return t;
+    }
+
+    const down = centerLine + d;
+    if (down <= doc.lines) {
+      const t = extractStartTime(doc.line(down).text);
+      if (t) return t;
+    }
+  }
+
+  return formatTime(new Date());
 }
 
 function buildInsertLine(payload: DragTaskPayload, time: string): string {
@@ -64,64 +114,108 @@ function buildInsertLine(payload: DragTaskPayload, time: string): string {
 }
 
 function createTaskDropExtension(settings: TemporalDriftSettings): Extension {
-  return EditorView.domEventHandlers({
-    dragover: (event, view): boolean => {
-      const payload = getDropPayload(event);
-      if (!payload) return false;
+  let lastHint: DropHint | null = null;
 
-      let filePath: string | null = null;
-      try {
-        const editorInfo = view.state.field(editorInfoField, false);
-        filePath = editorInfo?.file?.path ?? null;
-      } catch {
+  const clearHint = (view: EditorView) => {
+    if (!lastHint) return;
+    lastHint = null;
+    view.dispatch({ effects: setDropHintEffect.of(null) });
+  };
+
+  const updateHint = (view: EditorView, lineFrom: number, insertAbove: boolean) => {
+    const className = insertAbove ? "td-drop-target-above" : "td-drop-target-below";
+    if (lastHint?.lineFrom === lineFrom && lastHint?.className === className) return;
+    lastHint = { lineFrom, className };
+    view.dispatch({ effects: setDropHintEffect.of(lastHint) });
+  };
+
+  return [
+    dropHintField,
+    EditorView.domEventHandlers({
+      dragover: (event, view): boolean => {
+        const payload = getDropPayload(event);
+        if (!payload) return false;
+
+        let filePath: string | null = null;
+        try {
+          const editorInfo = view.state.field(editorInfoField, false);
+          filePath = editorInfo?.file?.path ?? null;
+        } catch {
+          return false;
+        }
+
+        if (!filePath || !pathInFolder(filePath, settings.dailyNotesFolder, ["Daily notes"])) {
+          clearHint(view);
+          return false;
+        }
+
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+
+        const coords = { x: event.clientX, y: event.clientY };
+        const pos = view.posAtCoords(coords) ?? view.state.selection.main.head;
+        const block = view.lineBlockAt(pos);
+        const insertAbove = event.clientY < (block.top + block.bottom) / 2;
+        const line = view.state.doc.lineAt(pos);
+
+        updateHint(view, line.from, insertAbove);
+
+        return true;
+      },
+
+      dragleave: (_event, view): boolean => {
+        clearHint(view);
         return false;
-      }
+      },
 
-      if (!filePath || !pathInFolder(filePath, settings.dailyNotesFolder, ["Daily notes"])) {
-        return false;
-      }
+      drop: (event, view): boolean => {
+        const payload = getDropPayload(event);
+        if (!payload) return false;
 
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-      return true;
-    },
+        let filePath: string | null = null;
+        try {
+          const editorInfo = view.state.field(editorInfoField, false);
+          filePath = editorInfo?.file?.path ?? null;
+        } catch {
+          return false;
+        }
 
-    drop: (event, view): boolean => {
-      const payload = getDropPayload(event);
-      if (!payload) return false;
+        if (!filePath || !pathInFolder(filePath, settings.dailyNotesFolder, ["Daily notes"])) {
+          clearHint(view);
+          return false;
+        }
 
-      let filePath: string | null = null;
-      try {
-        const editorInfo = view.state.field(editorInfoField, false);
-        filePath = editorInfo?.file?.path ?? null;
-      } catch {
-        return false;
-      }
+        event.preventDefault();
 
-      if (!filePath || !pathInFolder(filePath, settings.dailyNotesFolder, ["Daily notes"])) {
-        return false;
-      }
+        const coords = { x: event.clientX, y: event.clientY };
+        const pos = view.posAtCoords(coords) ?? view.state.selection.main.head;
+        const block = view.lineBlockAt(pos);
+        const insertAbove = event.clientY < (block.top + block.bottom) / 2;
 
-      event.preventDefault();
+        const line = view.state.doc.lineAt(pos);
 
-      const coords = { x: event.clientX, y: event.clientY };
-      const pos = view.posAtCoords(coords) ?? view.state.selection.main.head;
-      const line = view.state.doc.lineAt(pos);
+        const time = findClosestSlotTime(view, pos);
+        const insertLine = buildInsertLine(payload, time);
 
-      const time = currentLineTimeOrNow(view, pos);
-      const insertLine = buildInsertLine(payload, time);
+        const insertion = insertAbove
+          ? `${insertLine}\n`
+          : line.length === 0
+            ? insertLine
+            : `\n${insertLine}`;
 
-      const insertion = line.length === 0 ? insertLine : `\n${insertLine}`;
-      const from = line.length === 0 ? line.from : line.to;
+        const from = insertAbove ? line.from : line.length === 0 ? line.from : line.to;
 
-      view.dispatch({
-        changes: { from, to: from, insert: insertion },
-        selection: { anchor: from + insertion.length },
-      });
-      view.focus();
-      return true;
-    },
-  });
+        clearHint(view);
+
+        view.dispatch({
+          changes: { from, to: from, insert: insertion },
+          selection: { anchor: from + insertion.length },
+        });
+        view.focus();
+        return true;
+      },
+    }),
+  ];
 }
 
 export class TaskDropExtension {
