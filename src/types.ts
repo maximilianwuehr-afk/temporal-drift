@@ -6,6 +6,12 @@
 // Settings
 // ============================================================================
 
+export interface GoogleTasksToken {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+}
+
 export interface TemporalDriftSettings {
   dailyNotesFolder: string;
   tasksFolder: string;
@@ -16,6 +22,14 @@ export interface TemporalDriftSettings {
   showThankful: boolean;
   showFocus: boolean;
   calendarDays: number;
+
+  // Google Tasks Sync (optional)
+  googleTasksEnabled: boolean;
+  googleTasksClientId: string;
+  googleTasksClientSecret: string;
+  googleTasksToken: GoogleTasksToken | null;
+  googleTasksListId: string; // empty => use first list
+  googleTasksAutoSyncMinutes: number; // 0 => manual only
 }
 
 export const DEFAULT_SETTINGS: TemporalDriftSettings = {
@@ -28,6 +42,13 @@ export const DEFAULT_SETTINGS: TemporalDriftSettings = {
   showThankful: true,
   showFocus: true,
   calendarDays: 7,
+
+  googleTasksEnabled: false,
+  googleTasksClientId: "",
+  googleTasksClientSecret: "",
+  googleTasksToken: null,
+  googleTasksListId: "",
+  googleTasksAutoSyncMinutes: 5,
 };
 
 // ============================================================================
@@ -67,6 +88,11 @@ export interface TaskMeta {
   priority: "now" | "next" | "later";
   due?: string;
   created?: string;
+
+  // Sync metadata (optional)
+  googleTaskId?: string;
+  googleEtag?: string;
+  googleLastSynced?: number;
 }
 
 // ============================================================================

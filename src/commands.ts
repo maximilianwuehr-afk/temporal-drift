@@ -198,6 +198,31 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     },
   });
 
+  // Google Tasks sync commands
+  plugin.addCommand({
+    id: "google-tasks-connect",
+    name: "Google Tasks: Connect",
+    callback: async () => {
+      await (plugin as any).connectGoogleTasks?.();
+    },
+  });
+
+  plugin.addCommand({
+    id: "google-tasks-sync-now",
+    name: "Google Tasks: Sync now",
+    callback: async () => {
+      await (plugin as any).syncGoogleTasksNow?.();
+    },
+  });
+
+  plugin.addCommand({
+    id: "google-tasks-disconnect",
+    name: "Google Tasks: Disconnect",
+    callback: async () => {
+      await (plugin as any).disconnectGoogleTasks?.();
+    },
+  });
+
   // Quick capture to today's note
   plugin.addCommand({
     id: "quick-capture",

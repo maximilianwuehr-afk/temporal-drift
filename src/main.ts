@@ -2,7 +2,7 @@
 // Temporal Drift - Main Plugin Entry
 // ============================================================================
 
-import { Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import { Extension } from "@codemirror/state";
 
 import { DEFAULT_SETTINGS, TemporalDriftSettings } from "./types";
@@ -17,6 +17,8 @@ import { registerOpenTrigger } from "./automation/open-trigger";
 import { TaskDropExtension } from "./editor/task-drop";
 import { TemporalDriftTaskPoolView, VIEW_TYPE_TEMPORAL_DRIFT_TASK_POOL } from "./views/task-pool-view";
 import { TaskAllocationSync } from "./services/task-allocation-sync";
+import { TaskIndexService } from "./services/task-index";
+import { GoogleTasksSyncService } from "./services/google-tasks-sync";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
@@ -29,6 +31,9 @@ export default class TemporalDriftPlugin extends Plugin {
   private timelineLivePreview: TimelineLivePreviewExtension | null = null;
   private taskDrop: TaskDropExtension | null = null;
   private taskAllocationSync: TaskAllocationSync | null = null;
+  private taskIndex: TaskIndexService | null = null;
+  private googleTasksSync: GoogleTasksSyncService | null = null;
+  private googleTasksIntervalId: number | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -39,6 +44,24 @@ export default class TemporalDriftPlugin extends Plugin {
     this.timelineLivePreview = new TimelineLivePreviewExtension(this.settings);
     this.taskDrop = new TaskDropExtension(this.settings);
     this.taskAllocationSync = new TaskAllocationSync(this.app, this.settings);
+
+    this.taskIndex = new TaskIndexService(this.app, this.settings);
+    await this.taskIndex.buildIndex();
+
+    this.googleTasksSync = new GoogleTasksSyncService(this.app, this.settings, this.taskIndex, {
+      onTokenUpdate: async (token) => {
+        this.settings.googleTasksToken = token;
+        await this.saveSettings();
+      },
+    });
+
+    this.registerObsidianProtocolHandler("temporal-drift-oauth", async (params: any) => {
+      const code = params?.code;
+      if (!code) return;
+      if (!this.googleTasksSync) return;
+
+      await this.googleTasksSync.handleAuthCode(String(code));
+    });
 
     // Markdown-first: all core UX lives in editor/preview extensions, no custom ItemView required.
     this.registerEditorExtension(this.buildEditorExtensions());
@@ -51,17 +74,35 @@ export default class TemporalDriftPlugin extends Plugin {
       new TemporalDriftTaskPoolView(leaf, this)
     );
 
-    const syncTaskFile = async (file: TAbstractFile): Promise<void> => {
+    const onTaskFileEvent = async (file: TAbstractFile): Promise<void> => {
       if (!(file instanceof TFile)) return;
+
+      // Local sync: task note -> daily note allocation propagation
       await this.taskAllocationSync?.syncFromTaskFile(file);
+
+      // Index maintenance
+      await this.taskIndex?.onFileModify(file);
+
+      // Google Tasks sync
+      this.googleTasksSync?.onVaultEvent(file);
     };
 
-    this.registerEvent(this.app.vault.on("create", syncTaskFile));
-    this.registerEvent(this.app.vault.on("modify", syncTaskFile));
+    this.registerEvent(this.app.vault.on("create", onTaskFileEvent));
+    this.registerEvent(this.app.vault.on("modify", onTaskFileEvent));
     this.registerEvent(
-      this.app.vault.on("rename", async (file) => {
+      this.app.vault.on("rename", async (file, oldPath) => {
+        if (!(file instanceof TFile)) return;
+
+        await this.taskAllocationSync?.syncFromTaskFile(file);
+        await this.taskIndex?.onFileRename(file, String(oldPath));
+        this.googleTasksSync?.onVaultEvent(file);
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
         if (file instanceof TFile) {
-          await this.taskAllocationSync?.syncFromTaskFile(file);
+          this.taskIndex?.onFileDelete(file);
         }
       })
     );
@@ -90,6 +131,8 @@ export default class TemporalDriftPlugin extends Plugin {
       name: "Open task pool",
       callback: async () => this.activateTaskPool(),
     });
+
+    this.setupGoogleTasksAutoSync();
   }
 
   private async reconcileFolderDefaults(): Promise<void> {
@@ -141,6 +184,28 @@ export default class TemporalDriftPlugin extends Plugin {
     return extensions;
   }
 
+  private setupGoogleTasksAutoSync(): void {
+    // Clear any prior interval
+    if (this.googleTasksIntervalId) {
+      window.clearInterval(this.googleTasksIntervalId);
+      this.googleTasksIntervalId = null;
+    }
+
+    if (!this.googleTasksSync) return;
+    if (!this.settings.googleTasksEnabled) return;
+    if (!this.settings.googleTasksToken) return;
+
+    const minutes = Number(this.settings.googleTasksAutoSyncMinutes ?? 0);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+
+    const ms = Math.max(60_000, minutes * 60_000);
+    this.googleTasksIntervalId = window.setInterval(() => {
+      this.googleTasksSync?.syncAll();
+    }, ms);
+
+    this.registerInterval(this.googleTasksIntervalId);
+  }
+
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
@@ -153,6 +218,39 @@ export default class TemporalDriftPlugin extends Plugin {
     this.timelineLivePreview?.updateSettings(this.settings);
     this.taskDrop?.updateSettings(this.settings);
     this.taskAllocationSync?.updateSettings(this.settings);
+    this.taskIndex?.updateSettings(this.settings);
+    this.googleTasksSync?.updateSettings(this.settings);
+
+    this.setupGoogleTasksAutoSync();
+  }
+
+  async connectGoogleTasks(): Promise<void> {
+    if (!this.googleTasksSync) return;
+
+    if (!this.settings.googleTasksClientId || !this.settings.googleTasksClientSecret) {
+      new Notice("[Temporal Drift] Set Google client id/secret in settings first", 4000);
+      return;
+    }
+
+    // Opening an external URL from Obsidian is annoyingly inconsistent across platforms.
+    const url = this.googleTasksSync.getAuthUrl();
+    const openWithDefaultApp = (this.app as any).openWithDefaultApp as ((url: string) => void) | undefined;
+    if (openWithDefaultApp) openWithDefaultApp(url);
+    else window.open(url);
+
+    new Notice("[Temporal Drift] Complete Google OAuth in your browser…", 4000);
+  }
+
+  async syncGoogleTasksNow(): Promise<void> {
+    await this.googleTasksSync?.syncAll();
+  }
+
+  async disconnectGoogleTasks(): Promise<void> {
+    await this.googleTasksSync?.disconnect();
+  }
+
+  async listGoogleTaskLists(): Promise<Array<{ id: string; title: string }>> {
+    return (await this.googleTasksSync?.listTaskLists()) ?? [];
   }
 
   private async activateTaskPool(): Promise<void> {
