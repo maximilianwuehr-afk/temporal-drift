@@ -21,5 +21,9 @@ Thumbs.db
 .env
 .env.local
 
-# Local fixture vaults / automation artifacts
-/tests/fixtures/
+# Fixture vault artifacts (the vault content itself is tracked)
+/tests/fixtures/vault/.obsidian/plugins/temporal-drift/
+
+# Visual artifacts (baselines tracked; current/diffs generated)
+/tests/visual/current/
+/tests/visual/diffs/
