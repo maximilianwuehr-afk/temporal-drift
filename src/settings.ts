@@ -2,7 +2,7 @@
 // Temporal Drift Settings Tab
 // ============================================================================
 
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type TemporalDriftPlugin from "./main";
 
 export class TemporalDriftSettingTab extends PluginSettingTab {
@@ -125,6 +125,106 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
             this.plugin.settings.defaultPriority = value as "now" | "next" | "later";
             await this.plugin.saveSettings();
           })
+      );
+
+    // Google Tasks section
+    new Setting(containerEl).setName("Google Tasks Sync").setHeading();
+
+    new Setting(containerEl)
+      .setName("Enable Google Tasks sync")
+      .setDesc("Two-way sync between Tasks/ notes and your Google Tasks list.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.googleTasksEnabled).onChange(async (value) => {
+          this.plugin.settings.googleTasksEnabled = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Google OAuth Client ID")
+      .setDesc("Create an OAuth Client in Google Cloud Console. Redirect URI: obsidian://temporal-drift-oauth")
+      .addText((text) =>
+        text
+          .setPlaceholder("xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com")
+          .setValue(this.plugin.settings.googleTasksClientId)
+          .onChange(async (value) => {
+            this.plugin.settings.googleTasksClientId = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Google OAuth Client Secret")
+      .setDesc("Stored locally in your vault plugin data. Treat it like a password.")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        return text
+          .setPlaceholder("••••••••••••••••")
+          .setValue(this.plugin.settings.googleTasksClientSecret)
+          .onChange(async (value) => {
+            this.plugin.settings.googleTasksClientSecret = value.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Google Tasks list id (optional)")
+      .setDesc("Leave empty to use your first/default list.")
+      .addText((text) =>
+        text
+          .setPlaceholder("")
+          .setValue(this.plugin.settings.googleTasksListId)
+          .onChange(async (value) => {
+            this.plugin.settings.googleTasksListId = value.trim();
+            await this.plugin.saveSettings();
+          })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Show lists").onClick(async () => {
+          const lists = await this.plugin.listGoogleTaskLists();
+          const msg =
+            lists.length === 0
+              ? "No lists (not authenticated yet)."
+              : lists.map((l) => `${l.title} — ${l.id}`).join("\n");
+          new Notice(msg, 6000);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-sync interval (minutes)")
+      .setDesc("0 = manual only. Recommended: 5.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(0, 30, 1)
+          .setValue(this.plugin.settings.googleTasksAutoSyncMinutes)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.googleTasksAutoSyncMinutes = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Actions")
+      .setDesc("Connect, sync now, or disconnect.")
+      .addButton((btn) =>
+        btn
+          .setButtonText("Connect")
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.connectGoogleTasks();
+          })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Sync now").onClick(async () => {
+          await this.plugin.syncGoogleTasksNow();
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Disconnect").onClick(async () => {
+          await this.plugin.disconnectGoogleTasks();
+          new Notice("[Temporal Drift] Disconnected Google Tasks", 2500);
+        })
       );
   }
 }

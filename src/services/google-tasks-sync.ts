@@ -1,230 +1,236 @@
 // ============================================================================
-// Google Tasks Sync Service
+// Google Tasks Sync Service (Obsidian Tasks/ ↔ Google Tasks)
 // ============================================================================
 
-import { App, TFile, requestUrl, debounce } from "obsidian";
-import { TemporalDriftSettings, SettingsAware, TaskMeta } from "../types";
+import { App, Notice, TAbstractFile, TFile, debounce, normalizePath, requestUrl } from "obsidian";
+import { GoogleTasksToken, TemporalDriftSettings, TaskMeta } from "../types";
 import { TaskIndexService } from "./task-index";
 
-interface GoogleTasksToken {
-  access_token: string;
-  refresh_token: string;
-  expires_at: number;
-}
+type RemoteTaskStatus = "needsAction" | "completed";
 
 interface GoogleTask {
   id: string;
   title: string;
   notes?: string;
-  status: "needsAction" | "completed";
+  status: RemoteTaskStatus;
   due?: string;
   updated: string;
   etag: string;
 }
 
-interface SyncMeta {
-  googleTaskId?: string;
-  localModified: number;
-  remoteEtag?: string;
-  lastSynced: number;
+interface GoogleTaskList {
+  id: string;
+  title: string;
 }
 
-export class GoogleTasksSyncService implements SettingsAware {
+function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, "-").trim();
+}
+
+function parseObsidianPathFromNotes(notes?: string): string | null {
+  if (!notes) return null;
+  const m = notes.match(/Obsidian:\s*([^\n]+)/i);
+  return m?.[1]?.trim() || null;
+}
+
+function encodeTaskTitle(task: { title: string; priority: "now" | "next" | "later" }): string {
+  return `[${task.priority.toUpperCase()}] ${task.title}`;
+}
+
+function decodeTaskTitle(title: string): { title: string; priority: "now" | "next" | "later" } {
+  const match = title.match(/^\[(NOW|NEXT|LATER)\]\s*(.*)$/i);
+  if (match) {
+    return {
+      priority: match[1].toLowerCase() as "now" | "next" | "later",
+      title: match[2],
+    };
+  }
+  return { title, priority: "now" };
+}
+
+function canonicalStatus(done: boolean): "open" | "done" {
+  return done ? "done" : "open";
+}
+
+function parseRemoteDone(status: RemoteTaskStatus): boolean {
+  return status === "completed";
+}
+
+function isoDay(date: Date): string {
+  return date.toISOString().split("T")[0];
+}
+
+export class GoogleTasksSyncService {
   private app: App;
   private settings: TemporalDriftSettings;
-  private taskIndexService: TaskIndexService;
-  private token: GoogleTasksToken | null = null;
-  private syncMeta = new Map<string, SyncMeta>();
+  private taskIndex: TaskIndexService;
+  private token: GoogleTasksToken | null;
+
   private syncInProgress = false;
   private debouncedSync: (() => void) | null = null;
 
-  // Google OAuth config - user must provide these in settings
-  private clientId = "";
-  private clientSecret = "";
-  private redirectUri = "obsidian://temporal-drift-oauth";
+  private onTokenUpdate: (token: GoogleTasksToken | null) => Promise<void>;
 
-  constructor(app: App, settings: TemporalDriftSettings, taskIndexService: TaskIndexService) {
+  // OAuth
+  private readonly redirectUri = "obsidian://temporal-drift-oauth";
+
+  constructor(
+    app: App,
+    settings: TemporalDriftSettings,
+    taskIndex: TaskIndexService,
+    opts: { onTokenUpdate: (token: GoogleTasksToken | null) => Promise<void> }
+  ) {
     this.app = app;
     this.settings = settings;
-    this.taskIndexService = taskIndexService;
+    this.taskIndex = taskIndex;
+    this.token = settings.googleTasksToken;
+    this.onTokenUpdate = opts.onTokenUpdate;
+
     this.setupDebouncedSync();
   }
 
   updateSettings(settings: TemporalDriftSettings): void {
     this.settings = settings;
+    this.token = settings.googleTasksToken;
   }
 
-  /**
-   * Setup debounced sync (150ms)
-   */
   private setupDebouncedSync(): void {
-    this.debouncedSync = debounce(() => this.syncAll(), 150, true);
+    this.debouncedSync = debounce(() => this.syncAll(), 300, true);
   }
 
-  /**
-   * Check if sync is configured
-   */
   isConfigured(): boolean {
-    return !!(this.clientId && this.clientSecret && this.token);
+    return !!(
+      this.settings.googleTasksEnabled &&
+      this.settings.googleTasksClientId &&
+      this.settings.googleTasksClientSecret &&
+      this.token
+    );
   }
 
-  /**
-   * Set OAuth credentials
-   */
-  setCredentials(clientId: string, clientSecret: string): void {
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
-  }
-
-  /**
-   * Start OAuth flow - returns URL to open in browser
-   */
   getAuthUrl(): string {
     const scope = "https://www.googleapis.com/auth/tasks";
-    return `https://accounts.google.com/o/oauth2/v2/auth?` +
-      `client_id=${encodeURIComponent(this.clientId)}&` +
+    return (
+      `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${encodeURIComponent(this.settings.googleTasksClientId)}&` +
       `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
       `response_type=code&` +
       `scope=${encodeURIComponent(scope)}&` +
       `access_type=offline&` +
-      `prompt=consent`;
+      `prompt=consent`
+    );
   }
 
-  /**
-   * Exchange authorization code for tokens
-   */
   async handleAuthCode(code: string): Promise<void> {
     const response = await requestUrl({
       url: "https://oauth2.googleapis.com/token",
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
+        client_id: this.settings.googleTasksClientId,
+        client_secret: this.settings.googleTasksClientSecret,
         code,
         grant_type: "authorization_code",
         redirect_uri: this.redirectUri,
       }).toString(),
     });
 
-    const data = response.json;
-    this.token = {
+    const data = response.json as any;
+    const next: GoogleTasksToken = {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_at: Date.now() + (data.expires_in * 1000),
+      expires_at: Date.now() + data.expires_in * 1000,
     };
 
-    await this.saveToken();
+    this.token = next;
+    await this.onTokenUpdate(next);
   }
 
-  /**
-   * Refresh access token
-   */
+  disconnect(): Promise<void> {
+    this.token = null;
+    return this.onTokenUpdate(null);
+  }
+
+  triggerSync(): void {
+    if (!this.settings.googleTasksEnabled) return;
+    this.debouncedSync?.();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Remote API
+  // ---------------------------------------------------------------------------
+
   private async refreshToken(): Promise<void> {
-    if (!this.token?.refresh_token) {
-      throw new Error("No refresh token available");
-    }
+    if (!this.token?.refresh_token) throw new Error("No refresh token");
 
     const response = await requestUrl({
       url: "https://oauth2.googleapis.com/token",
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
+        client_id: this.settings.googleTasksClientId,
+        client_secret: this.settings.googleTasksClientSecret,
         refresh_token: this.token.refresh_token,
         grant_type: "refresh_token",
       }).toString(),
     });
 
-    const data = response.json;
-    this.token = {
+    const data = response.json as any;
+    const next: GoogleTasksToken = {
       ...this.token,
       access_token: data.access_token,
-      expires_at: Date.now() + (data.expires_in * 1000),
+      expires_at: Date.now() + data.expires_in * 1000,
     };
 
-    await this.saveToken();
+    this.token = next;
+    await this.onTokenUpdate(next);
   }
 
-  /**
-   * Get valid access token (refresh if needed)
-   */
   private async getAccessToken(): Promise<string> {
-    if (!this.token) {
-      throw new Error("Not authenticated");
-    }
+    if (!this.token) throw new Error("Not authenticated");
 
-    // Refresh if expires in next 5 minutes
-    if (Date.now() > this.token.expires_at - 300000) {
+    // refresh if expires in next 5 minutes
+    if (Date.now() > this.token.expires_at - 300_000) {
       await this.refreshToken();
     }
 
     return this.token.access_token;
   }
 
-  /**
-   * Save token to plugin data
-   */
-  private async saveToken(): Promise<void> {
-    // Token would be saved to plugin settings
-    // For security, we don't encrypt here but note this should be done in production
-  }
-
-  /**
-   * Load token from plugin data
-   */
-  async loadToken(token: GoogleTasksToken): Promise<void> {
-    this.token = token;
-  }
-
-  /**
-   * Fetch all tasks from Google Tasks
-   */
-  private async fetchRemoteTasks(): Promise<GoogleTask[]> {
+  private async fetchLists(): Promise<GoogleTaskList[]> {
     const accessToken = await this.getAccessToken();
 
-    // Get default task list
-    const listsResponse = await requestUrl({
-      url: "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    const lists = listsResponse.json.items || [];
-    if (lists.length === 0) return [];
-
-    // Use first list
-    const listId = lists[0].id;
-
-    const tasksResponse = await requestUrl({
-      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks`,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    return tasksResponse.json.items || [];
-  }
-
-  /**
-   * Create task in Google Tasks
-   */
-  private async createRemoteTask(task: TaskMeta): Promise<GoogleTask> {
-    const accessToken = await this.getAccessToken();
-
-    // Get default list
     const listsResponse = await requestUrl({
       url: "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    const listId = listsResponse.json.items?.[0]?.id;
-    if (!listId) throw new Error("No task list found");
+
+    const items = (listsResponse.json as any).items ?? [];
+    return items.map((l: any) => ({ id: String(l.id), title: String(l.title ?? "") }));
+  }
+
+  private async resolveListId(): Promise<string> {
+    if (this.settings.googleTasksListId?.trim()) return this.settings.googleTasksListId.trim();
+
+    const lists = await this.fetchLists();
+    const first = lists[0]?.id;
+    if (!first) throw new Error("No Google Task lists found");
+
+    return first;
+  }
+
+  private async fetchRemoteTasks(listId: string): Promise<GoogleTask[]> {
+    const accessToken = await this.getAccessToken();
+
+    const tasksResponse = await requestUrl({
+      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks?showCompleted=true&showHidden=true&maxResults=1000`,
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    return ((tasksResponse.json as any).items ?? []) as GoogleTask[];
+  }
+
+  private async createRemoteTask(listId: string, task: TaskMeta): Promise<GoogleTask> {
+    const accessToken = await this.getAccessToken();
 
     const response = await requestUrl({
       url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks`,
@@ -234,20 +240,21 @@ export class GoogleTasksSyncService implements SettingsAware {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        title: this.encodeTaskTitle(task),
+        title: encodeTaskTitle(task),
         notes: `Obsidian: ${task.path}`,
         status: task.status === "done" ? "completed" : "needsAction",
         due: task.due ? `${task.due}T00:00:00.000Z` : undefined,
       }),
     });
 
-    return response.json;
+    return response.json as any;
   }
 
-  /**
-   * Update task in Google Tasks
-   */
-  private async updateRemoteTask(listId: string, taskId: string, task: TaskMeta): Promise<GoogleTask> {
+  private async patchRemoteTask(
+    listId: string,
+    taskId: string,
+    patch: Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">>
+  ): Promise<GoogleTask> {
     const accessToken = await this.getAccessToken();
 
     const response = await requestUrl({
@@ -257,127 +264,252 @@ export class GoogleTasksSyncService implements SettingsAware {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        title: this.encodeTaskTitle(task),
-        status: task.status === "done" ? "completed" : "needsAction",
-        due: task.due ? `${task.due}T00:00:00.000Z` : undefined,
-      }),
+      body: JSON.stringify(patch),
     });
 
-    return response.json;
+    return response.json as any;
   }
 
-  /**
-   * Encode task priority in title: [NOW] Task name
-   */
-  private encodeTaskTitle(task: TaskMeta): string {
-    const prefix = `[${task.priority.toUpperCase()}]`;
-    return `${prefix} ${task.title}`;
+  // ---------------------------------------------------------------------------
+  // Local helpers
+  // ---------------------------------------------------------------------------
+
+  private isTaskFile(file: TFile): boolean {
+    const prefix = normalizePath(this.settings.tasksFolder + "/");
+    return normalizePath(file.path).startsWith(prefix);
   }
 
-  /**
-   * Decode priority from title
-   */
-  private decodeTaskTitle(title: string): { title: string; priority: "now" | "next" | "later" } {
-    const match = title.match(/^\[(NOW|NEXT|LATER)\]\s*(.*)$/i);
-    if (match) {
-      return {
-        priority: match[1].toLowerCase() as "now" | "next" | "later",
-        title: match[2],
-      };
+  private getLocalTaskFiles(): TFile[] {
+    const prefix = normalizePath(this.settings.tasksFolder + "/");
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((f) => normalizePath(f.path).startsWith(prefix))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  private getFrontmatter(file: TFile): Record<string, any> {
+    const cache = this.app.metadataCache.getFileCache(file);
+    return ((cache?.frontmatter ?? {}) as Record<string, any>) || {};
+  }
+
+  private getLocalTaskMeta(file: TFile): TaskMeta {
+    const fm = this.getFrontmatter(file);
+    const status = (typeof fm.status === "string" ? fm.status : "open") as "open" | "done";
+    const priority = (typeof fm.priority === "string" ? fm.priority : this.settings.defaultPriority) as
+      | "now"
+      | "next"
+      | "later";
+
+    return {
+      path: file.path,
+      title: file.basename,
+      status,
+      priority,
+      due: typeof fm.due === "string" ? fm.due : undefined,
+      created: typeof fm.created === "string" ? fm.created : undefined,
+      googleTaskId: typeof fm.google_task_id === "string" ? fm.google_task_id : undefined,
+      googleEtag: typeof fm.google_etag === "string" ? fm.google_etag : undefined,
+      googleLastSynced: typeof fm.google_last_synced === "number" ? fm.google_last_synced : undefined,
+    };
+  }
+
+  private async writeSyncMeta(file: TFile, meta: { id: string; etag: string; lastSynced: number }): Promise<void> {
+    await this.app.fileManager.processFrontMatter(file, (fm) => {
+      (fm as any).google_task_id = meta.id;
+      (fm as any).google_etag = meta.etag;
+      (fm as any).google_last_synced = meta.lastSynced;
+
+      // also keep canonical booleans consistent
+      if (typeof (fm as any).done !== "boolean" && typeof (fm as any).status === "string") {
+        (fm as any).done = String((fm as any).status).toLowerCase() === "done";
+      }
+    });
+  }
+
+  private async applyRemoteToLocal(file: TFile, remote: GoogleTask, listId: string): Promise<void> {
+    const decoded = decodeTaskTitle(remote.title);
+    const done = parseRemoteDone(remote.status);
+
+    // Ensure the remote has a mapping note.
+    const notes = remote.notes ?? "";
+    if (!parseObsidianPathFromNotes(notes)) {
+      await this.patchRemoteTask(listId, remote.id, {
+        notes: `${notes ? notes + "\n" : ""}Obsidian: ${file.path}`,
+      });
     }
-    return { title, priority: "now" };
+
+    // Update frontmatter
+    await this.app.fileManager.processFrontMatter(file, (fm) => {
+      fm.status = canonicalStatus(done);
+      (fm as any).done = done;
+      fm.priority = decoded.priority;
+    });
+
+    // Update first checkbox line (best-effort)
+    await this.app.vault.process(file, (content) => {
+      const lines = content.split("\n");
+      const idx = lines.findIndex((l) => l.match(/^(?:\s*-\s*)?\[\s*[xX ]\s*\]/));
+      const checkbox = done ? "[x]" : "[ ]";
+      const priority = decoded.priority ? ` #${decoded.priority}` : "";
+
+      if (idx >= 0) {
+        const rest = lines[idx].replace(/^(\s*-?\s*)\[\s*[xX ]\s*\]\s*/, "");
+        const cleaned = rest.replace(/(?:^|\s)(?:#now|#next|#later|@now|@next|@later|\[now\]|\[next\]|\[later\]|\(now\)|\(next\)|\(later\))(?=\s|$)/gi, " ")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        lines[idx] = `- ${checkbox} ${cleaned}${priority}`.trim();
+        return lines.join("\n");
+      }
+
+      // If no checkbox, prepend one.
+      const head = `- ${checkbox} ${decoded.title}${priority}`.trim();
+      return `${head}\n${content}`;
+    });
+
+    await this.writeSyncMeta(file, { id: remote.id, etag: remote.etag, lastSynced: Date.now() });
   }
 
-  /**
-   * Sync all tasks
-   */
+  private async pushLocalToRemote(file: TFile, local: TaskMeta, remote: GoogleTask, listId: string): Promise<void> {
+    const next = await this.patchRemoteTask(listId, remote.id, {
+      title: encodeTaskTitle(local),
+      status: local.status === "done" ? "completed" : "needsAction",
+      due: local.due ? `${local.due}T00:00:00.000Z` : undefined,
+      notes: remote.notes ?? `Obsidian: ${local.path}`,
+    });
+
+    await this.writeSyncMeta(file, { id: next.id, etag: next.etag, lastSynced: Date.now() });
+  }
+
+  private async ensureLocalFromRemote(remote: GoogleTask): Promise<TFile | null> {
+    const mappedPath = parseObsidianPathFromNotes(remote.notes);
+    if (mappedPath) {
+      const af = this.app.vault.getAbstractFileByPath(mappedPath);
+      if (af instanceof TFile) return af;
+    }
+
+    // Create a new local task note in Tasks/
+    const decoded = decodeTaskTitle(remote.title);
+    const done = parseRemoteDone(remote.status);
+
+    const safe = sanitizeFileName(decoded.title) || `Google Task ${isoDay(new Date())}`;
+    const path = normalizePath(`${this.settings.tasksFolder}/${safe}.md`);
+
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) return existing;
+
+    const checkbox = done ? "[x]" : "[ ]";
+    const priority = decoded.priority ? ` #${decoded.priority}` : "";
+
+    const content = `---\nstatus: ${canonicalStatus(done)}\npriority: ${decoded.priority}\ndone: ${done}\ncreated: ${isoDay(new Date())}\n---\n\n- ${checkbox} ${decoded.title}${priority}\n`;
+
+    const file = await this.app.vault.create(path, content);
+    return file;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main sync loop
+  // ---------------------------------------------------------------------------
+
   async syncAll(): Promise<void> {
     if (!this.isConfigured() || this.syncInProgress) return;
 
     this.syncInProgress = true;
-    try {
-      const remoteTasks = await this.fetchRemoteTasks();
-      const localTasks = this.taskIndexService.getByStatus("open").concat(
-        this.taskIndexService.getByStatus("done")
-      );
 
-      // Reconcile each task
-      for (const local of localTasks) {
-        const meta = this.syncMeta.get(local.path);
-        const remote = remoteTasks.find((r) => r.notes?.includes(local.path));
+    try {
+      const listId = await this.resolveListId();
+      const remoteTasks = await this.fetchRemoteTasks(listId);
+      const remoteById = new Map(remoteTasks.map((t) => [t.id, t]));
+
+      // Build local set
+      const localFiles = this.getLocalTaskFiles();
+
+      // First: ensure local->remote mapping exists and reconcile
+      for (const file of localFiles) {
+        const local = this.getLocalTaskMeta(file);
+
+        // Skip non-task notes without frontmatter status/priority
+        if (!this.isTaskFile(file)) continue;
+
+        // Find remote by id, or by notes mapping.
+        let remote: GoogleTask | undefined;
+
+        if (local.googleTaskId) {
+          remote = remoteById.get(local.googleTaskId);
+        }
 
         if (!remote) {
-          // Push new local task to remote
-          const created = await this.createRemoteTask(local);
-          this.syncMeta.set(local.path, {
-            googleTaskId: created.id,
-            localModified: Date.now(),
-            remoteEtag: created.etag,
-            lastSynced: Date.now(),
+          remote = remoteTasks.find((t) => parseObsidianPathFromNotes(t.notes) === file.path);
+        }
+
+        if (!remote) {
+          // Create remote
+          const created = await this.createRemoteTask(listId, local);
+          await this.writeSyncMeta(file, { id: created.id, etag: created.etag, lastSynced: Date.now() });
+          continue;
+        }
+
+        const lastSynced = local.googleLastSynced ?? 0;
+        const localModified = file.stat.mtime;
+        const remoteModified = new Date(remote.updated).getTime();
+
+        if (localModified > lastSynced && remoteModified > lastSynced) {
+          // Conflict: choose local (authoritative) but log.
+          console.warn("[Temporal Drift] Google Tasks conflict; choosing local", {
+            path: file.path,
+            localModified,
+            remoteModified,
+            lastSynced,
           });
-        } else if (meta) {
-          // Reconcile existing task
-          await this.reconcileTask(local, remote, meta);
+        }
+
+        if (localModified > lastSynced) {
+          await this.pushLocalToRemote(file, local, remote, listId);
+          continue;
+        }
+
+        if (remoteModified > lastSynced) {
+          await this.applyRemoteToLocal(file, remote, listId);
         }
       }
+
+      // Second: remote tasks that are not represented locally => create local notes.
+      const localPaths = new Set(localFiles.map((f) => f.path));
+
+      for (const remote of remoteTasks) {
+        const mappedPath = parseObsidianPathFromNotes(remote.notes);
+        if (mappedPath && localPaths.has(mappedPath)) continue;
+
+        // Create local for unmapped tasks that look like ours (or all tasks, by default)
+        const localFile = await this.ensureLocalFromRemote(remote);
+        if (!localFile) continue;
+
+        // Persist mapping meta and patch remote notes to include Obsidian path.
+        await this.applyRemoteToLocal(localFile, remote, listId);
+      }
+
+      new Notice("[Temporal Drift] Google Tasks sync complete", 2000);
     } catch (e) {
-      console.error("Temporal Drift: Sync failed", e);
+      console.error("[Temporal Drift] Google Tasks sync failed", e);
+      new Notice("[Temporal Drift] Google Tasks sync failed — see console", 4000);
     } finally {
       this.syncInProgress = false;
     }
   }
 
-  /**
-   * Reconcile a single task between local and remote
-   */
-  private async reconcileTask(local: TaskMeta, remote: GoogleTask, meta: SyncMeta): Promise<void> {
-    const localModified = this.getLocalModifiedTime(local);
-    const remoteModified = new Date(remote.updated).getTime();
-
-    if (localModified > meta.lastSynced) {
-      // Local wins - push to remote
-      // await this.updateRemoteTask(...);
-      meta.lastSynced = Date.now();
-    } else if (remoteModified > meta.lastSynced) {
-      // Remote wins - update local
-      const decoded = this.decodeTaskTitle(remote.title);
-      await this.taskIndexService.updatePriority(local.path, decoded.priority);
-      if (remote.status === "completed" && local.status === "open") {
-        await this.taskIndexService.toggleStatus(local.path, "done");
-      } else if (remote.status === "needsAction" && local.status === "done") {
-        await this.taskIndexService.toggleStatus(local.path, "open");
-      }
-      meta.lastSynced = Date.now();
-      meta.remoteEtag = remote.etag;
+  // Convenience: list available task lists (for settings UI)
+  async listTaskLists(): Promise<GoogleTaskList[]> {
+    if (!this.token) return [];
+    try {
+      return await this.fetchLists();
+    } catch {
+      return [];
     }
-
-    this.syncMeta.set(local.path, meta);
   }
 
-  /**
-   * Get local file modified time
-   */
-  private getLocalModifiedTime(task: TaskMeta): number {
-    const file = this.app.vault.getAbstractFileByPath(task.path);
-    if (file instanceof TFile) {
-      return file.stat.mtime;
-    }
-    return 0;
-  }
-
-  /**
-   * Trigger sync (debounced)
-   */
-  triggerSync(): void {
-    this.debouncedSync?.();
-  }
-
-  /**
-   * Disconnect sync
-   */
-  disconnect(): void {
-    this.token = null;
-    this.syncMeta.clear();
+  // Listen to vault events: trigger sync on task changes
+  onVaultEvent(file: TAbstractFile): void {
+    if (!(file instanceof TFile)) return;
+    if (!this.isTaskFile(file)) return;
+    this.triggerSync();
   }
 }
