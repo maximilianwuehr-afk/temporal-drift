@@ -26,7 +26,7 @@ export interface TemporalDriftSettings {
   // Google Tasks Sync (optional)
   googleTasksEnabled: boolean;
   googleTasksClientId: string;
-  googleTasksClientSecret: string;
+  googleTasksClientSecret: string; // optional (desktop apps should prefer PKCE; secret is not truly secret)
   googleTasksToken: GoogleTasksToken | null;
   googleTasksListId: string; // empty => use first list
   googleTasksAutoSyncMinutes: number; // 0 => manual only

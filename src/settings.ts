@@ -142,7 +142,7 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Google OAuth Client ID")
-      .setDesc("Create an OAuth Client in Google Cloud Console. Redirect URI: obsidian://temporal-drift-oauth")
+      .setDesc("Create an OAuth Client in Google Cloud Console (type: Desktop app / Installed). Temporal Drift uses a loopback redirect (127.0.0.1) + PKCE.")
       .addText((text) =>
         text
           .setPlaceholder("xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com")
@@ -154,8 +154,8 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Google OAuth Client Secret")
-      .setDesc("Stored locally in your vault plugin data. Treat it like a password.")
+      .setName("Google OAuth Client Secret (optional)")
+      .setDesc("Optional. Desktop apps should not rely on a secret, but we allow it for compatibility.")
       .addText((text) => {
         text.inputEl.type = "password";
         return text

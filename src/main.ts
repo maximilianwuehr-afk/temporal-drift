@@ -55,13 +55,7 @@ export default class TemporalDriftPlugin extends Plugin {
       },
     });
 
-    this.registerObsidianProtocolHandler("temporal-drift-oauth", async (params: any) => {
-      const code = params?.code;
-      if (!code) return;
-      if (!this.googleTasksSync) return;
-
-      await this.googleTasksSync.handleAuthCode(String(code));
-    });
+    // Google OAuth handled via loopback server (PKCE)
 
     // Markdown-first: all core UX lives in editor/preview extensions, no custom ItemView required.
     this.registerEditorExtension(this.buildEditorExtensions());
@@ -227,18 +221,21 @@ export default class TemporalDriftPlugin extends Plugin {
   async connectGoogleTasks(): Promise<void> {
     if (!this.googleTasksSync) return;
 
-    if (!this.settings.googleTasksClientId || !this.settings.googleTasksClientSecret) {
-      new Notice("[Temporal Drift] Set Google client id/secret in settings first", 4000);
+    if (!this.settings.googleTasksClientId) {
+      new Notice("[Temporal Drift] Set Google client id in settings first", 4000);
       return;
     }
 
     // Opening an external URL from Obsidian is annoyingly inconsistent across platforms.
-    const url = this.googleTasksSync.getAuthUrl();
     const openWithDefaultApp = (this.app as any).openWithDefaultApp as ((url: string) => void) | undefined;
-    if (openWithDefaultApp) openWithDefaultApp(url);
-    else window.open(url);
+    const openUrl = (url: string) => {
+      if (openWithDefaultApp) openWithDefaultApp(url);
+      else window.open(url);
+    };
 
-    new Notice("[Temporal Drift] Complete Google OAuth in your browser…", 4000);
+    new Notice("[Temporal Drift] Opening Google OAuth…", 2500);
+
+    await this.googleTasksSync.beginAuthFlow(openUrl);
   }
 
   async syncGoogleTasksNow(): Promise<void> {
