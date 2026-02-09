@@ -1,45 +1,63 @@
 # Temporal Drift Testing
 
-## Peekaboo Visual Testing
-
-**Note:** Peekaboo permissions are granted to Maxi's terminal. Run tests from there.
-
-### Quick Test Commands
+## Quick commands
 
 ```bash
-# Capture current Obsidian state
-peekaboo see --app Obsidian --annotate --path /tmp/td-test.png
-
-# Open test daily note
-open "obsidian://open?vault=wuehr&file=Daily%20notes%2F2027-01-01"
-
-# Capture after navigation
-sleep 2 && peekaboo image --app Obsidian --path /tmp/td-timeline.png
+npm run build
+npm run test:unit
+npm run verify
 ```
 
-### Test Scenarios
+## Unit tests (fast, cross-platform)
 
-| ID | File | What to Check |
-|----|------|---------------|
-| T1 | 2027-01-01.md | Base rendering: timestamps amber, content readable |
-| T2 | 2027-01-02.md | Minimal: clean layout with few entries |
-| T3 | 2027-01-03.md | Dense: performance with 20+ entries |
-| T4 | 2027-01-04.md | Edge cases: malformed times, unicode |
-| T5 | 2027-01-05.md | Real data: historical calendar events |
-
-### Acceptance Criteria (Phase 1)
-
-- [ ] Timestamps (`HH:mm`) render in amber monospace
-- [ ] Content renders in sans-serif
-- [ ] Current time block has left border accent
-- [ ] Enter at end of entry inserts new timestamp
-- [ ] No performance lag on scroll
-- [ ] Dark mode colors work
-
-### Running Tests
+Runs `node:test` against our TypeScript unit tests (via `tsx`).
 
 ```bash
-# Full test run
-cd ~/Workspace/obsidian_plugins/temporal-drift
-./test-visual.sh
+npm run test:unit
+```
+
+## Visual regression (macOS only)
+
+Visual captures rely on:
+- Obsidian desktop app
+- `open` + `peekaboo`
+
+The fixture vault lives at:
+- `tests/fixtures/vault/`
+
+### Capture current
+
+```bash
+npm run build
+npm run visual:capture
+```
+
+Screenshots are written to:
+- `tests/visual/current/*.png`
+
+### Compare vs baseline
+
+```bash
+npm run visual:compare
+```
+
+If there are diffs, they’re written to:
+- `tests/visual/diffs/*.png`
+
+### Update baseline (when diffs are intended)
+
+```bash
+npm run visual:baseline
+```
+
+Baselines are tracked in git:
+- `tests/visual/baselines/*.png`
+
+## Smoke test (macOS only)
+
+Runs a small integration assertion + a window capture.
+
+```bash
+npm run build
+scripts/e2e/smoke.sh
 ```

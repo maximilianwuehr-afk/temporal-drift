@@ -5,7 +5,12 @@
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "node esbuild.config.mjs production"
+    "build": "node esbuild.config.mjs production",
+    "test:unit": "tsx --test tests/unit/*.test.ts",
+    "verify": "npm run build && npm run test:unit",
+    "visual:capture": "TD_REPORT_DIR=tests/visual scripts/visual/capture.sh",
+    "visual:compare": "node scripts/visual/compare.mjs",
+    "visual:baseline": "scripts/visual/update-baseline.sh"
   },
   "keywords": [
     "obsidian",
@@ -20,6 +25,9 @@
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.19.0",
     "obsidian": "^1.4.0",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.20.5",
     "typescript": "^5.3.0"
   },
   "dependencies": {
