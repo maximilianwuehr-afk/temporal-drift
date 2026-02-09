@@ -1,6 +1,6 @@
 {
   "name": "temporal-drift",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Timeline-based daily notes with time as list numeration",
   "main": "main.js",
   "scripts": {

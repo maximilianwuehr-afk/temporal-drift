@@ -1,7 +1,7 @@
 {
   "id": "temporal-drift",
   "name": "Temporal Drift",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "minAppVersion": "1.0.0",
   "description": "Timeline-based daily notes with time as list numeration.",
   "author": "Maximilian Wühr",
