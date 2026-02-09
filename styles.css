@@ -563,3 +563,15 @@
   font-size: 12px;
   padding: 4px 2px;
 }
+
+/* --------------------------------------------------------------------------
+   Drag-and-drop insertion hint (Task Pool → Daily note)
+   -------------------------------------------------------------------------- */
+
+.cm-line.td-drop-target-above {
+  border-top: 2px solid var(--interactive-accent);
+}
+
+.cm-line.td-drop-target-below {
+  border-bottom: 2px solid var(--interactive-accent);
+}
