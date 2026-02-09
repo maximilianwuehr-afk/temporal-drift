@@ -29,6 +29,28 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     },
   });
 
+  // Add inline task with timestamp
+  plugin.addCommand({
+    id: "add-inline-task",
+    name: "Add inline task",
+    editorCallback: (editor: Editor, ctx: MarkdownView | MarkdownFileInfo) => {
+      const time = formatTime(new Date());
+      const cursor = editor.getCursor();
+      const line = editor.getLine(cursor.line);
+
+      const insertion = `${time} — [ ] `;
+
+      if (line.trim() === "") {
+        editor.replaceRange(insertion, { line: cursor.line, ch: 0 });
+        editor.setCursor({ line: cursor.line, ch: insertion.length });
+      } else {
+        const endOfLine = { line: cursor.line, ch: line.length };
+        editor.replaceRange(`\n\n${insertion}`, endOfLine);
+        editor.setCursor({ line: cursor.line + 2, ch: insertion.length });
+      }
+    },
+  });
+
   // Quick capture to today's note
   plugin.addCommand({
     id: "quick-capture",

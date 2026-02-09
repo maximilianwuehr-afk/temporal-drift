@@ -1,66 +1,34 @@
 // ============================================================================
 // Timeline Reading View Post Processor
 //
-// Renders prototype-style timeline cards in READING VIEW (markdown preview).
+// Renders prototype-style timeline cards in Reading View (markdown preview).
 // Live Preview is handled separately via CM6 widgets.
-//
-// Strategy:
-// - Parse the source markdown (by file path) into timestamp entry ranges.
-// - Walk rendered DOM blocks; if a block corresponds to an entry range, replace
-//   the first block with a card and remove subsequent blocks that belong to the
-//   same entry.
 // ============================================================================
 
 import { MarkdownPostProcessorContext, MarkdownView, TFile, normalizePath } from "obsidian";
+import { pathInFolder } from "../utils/folder-match";
 import type TemporalDriftPlugin from "../main";
+import {
+  extractParticipants,
+  extractPrimaryLink,
+  isTimelineLine,
+  parseTimelineLine,
+  stripEventIdSuffix,
+  stripWikilinks,
+} from "../parsing/timeline";
 
 type Participant = { target: string; display: string };
 
 type ParsedEntry = {
   lineStart: number; // 0-based line index
   lineEnd: number; // inclusive
-  time: string; // HH:mm
+  time: string; // HH:mm or HH:mm–HH:mm
   head: string;
   title: string;
   locationText: string;
   participants: Participant[];
   bodyLines: string[];
 };
-
-const TIME_LINE_RE = /^\s*(?:[-*+]\s+)?(\d{2}):(\d{2})\s+(.*)$/;
-const IS_TIME_LINE = (line: string) => /^\s*(?:[-*+]\s+)?\d{2}:\d{2}\s/.test(line);
-
-function parseWikilinkDisplay(raw: string): { target: string; display: string } {
-  const match = raw.match(/^([^|]+)(?:\|(.+))?$/);
-  const target = (match?.[1] ?? raw).trim();
-  const display = (match?.[2] ?? target.split("/").pop() ?? target).trim();
-  return { target, display };
-}
-
-function stripWikilinks(text: string): string {
-  return text.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, p1: string, p2: string | undefined) => {
-    const display = (p2 ?? p1.split("/").pop() ?? p1).trim();
-    return display;
-  });
-}
-
-function stripEventIdSuffix(title: string): string {
-  return title.replace(/\s*~[a-zA-Z0-9]+$/, "").trim();
-}
-
-function extractPrimaryLink(head: string): { target: string; display: string } | null {
-  const m = head.match(/\[\[([^\]]+)\]\]/);
-  if (!m) return null;
-  return parseWikilinkDisplay(m[1]);
-}
-
-function extractParticipants(head: string): Participant[] {
-  const withIdx = head.indexOf(" with ");
-  if (withIdx < 0) return [];
-  const tail = head.slice(withIdx + " with ".length);
-  const matches = Array.from(tail.matchAll(/\[\[([^\]]+)\]\]/g));
-  return matches.map((m) => parseWikilinkDisplay(m[1]));
-}
 
 function getInitials(name: string): string {
   const cleaned = name.replace(/\[\[|\]\]/g, "").trim();
@@ -76,19 +44,17 @@ function parseEntriesFromMarkdown(md: string): ParsedEntry[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!IS_TIME_LINE(line)) continue;
+    const parsed = parseTimelineLine(line);
+    if (!parsed) continue;
 
-    const m = line.match(TIME_LINE_RE);
-    if (!m) continue;
-
-    const time = `${m[1]}:${m[2]}`;
-    const head = (m[3] ?? "").trim();
+    const time = parsed.timeText;
+    const head = parsed.head;
 
     const bodyLines: string[] = [];
     let j = i + 1;
     while (j < lines.length) {
       const next = lines[j];
-      if (IS_TIME_LINE(next)) break;
+      if (isTimelineLine(next)) break;
       if (next.match(/^##/)) break;
 
       if (next.trim() === "") {
@@ -244,10 +210,9 @@ async function openAndJumpToLine(app: TemporalDriftPlugin["app"], file: TFile, l
   const mdView = app.workspace.getActiveViewOfType(MarkdownView);
   if (!mdView) return;
 
-  // If we are in preview (reading view), flip back to source (Live Preview) so cursor is meaningful.
+  // If we are in reading view, flip back to source so cursor is meaningful.
   if (mdView.getMode() === "preview") {
-    // toggles preview <-> source
-    await app.commands.executeCommandById("markdown:toggle-preview");
+    await (app as any).commands?.executeCommandById?.("markdown:toggle-preview");
   }
 
   mdView.editor.setCursor({ line, ch: 0 });
@@ -258,62 +223,61 @@ export function registerTimelinePostProcessor(plugin: TemporalDriftPlugin): void
   // Cache parsed entries per file mtime.
   const cache = new Map<string, { mtime: number; entries: ParsedEntry[]; byStart: Map<number, ParsedEntry> }>();
 
-  plugin.registerMarkdownPostProcessor(async (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
-    const sourcePath = ctx.sourcePath;
-    if (!sourcePath) return;
+  plugin.registerMarkdownPostProcessor(
+    async (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
+      const sourcePath = ctx.sourcePath;
+      if (!sourcePath) return;
 
-    const folderPrefix = normalizePath(plugin.settings.dailyNotesFolder + "/");
-    const normalizedPath = normalizePath(sourcePath);
-
-    if (!normalizedPath.startsWith(folderPrefix)) return;
-
-    const af = plugin.app.vault.getAbstractFileByPath(sourcePath);
-    if (!(af instanceof TFile)) return;
-
-    // Parse / cache
-    const mtime = af.stat.mtime;
-    let cached = cache.get(sourcePath);
-    if (!cached || cached.mtime !== mtime) {
-      const md = await plugin.app.vault.read(af);
-      const entries = parseEntriesFromMarkdown(md);
-      const byStart = new Map<number, ParsedEntry>();
-      for (const e of entries) byStart.set(e.lineStart, e);
-      cached = { mtime, entries, byStart };
-      cache.set(sourcePath, cached);
-    }
-
-    if (cached.entries.length === 0) return;
-
-    // Build a quick range lookup
-    const ranges = cached.entries.map((e) => ({ start: e.lineStart, end: e.lineEnd }));
-
-    const inAnyRange = (line: number): boolean => {
-      for (const r of ranges) {
-        if (line >= r.start && line <= r.end) return true;
+      const normalizedPath = normalizePath(sourcePath);
+      if (!pathInFolder(normalizedPath, plugin.settings.dailyNotesFolder, ["Daily notes"])) {
+        return;
       }
-      return false;
-    };
 
-    // Walk candidate blocks. In preview mode, timeline entries may render inside list items,
-    // so we search for li/p elements first; fallback to direct children.
-    const candidates = Array.from(el.querySelectorAll("li, p"));
-    const blocks = candidates.length > 0 ? candidates : Array.from(el.children);
+      const af = plugin.app.vault.getAbstractFileByPath(sourcePath);
+      if (!(af instanceof TFile)) return;
 
-    for (const child of blocks) {
-      const info = ctx.getSectionInfo(child as HTMLElement);
-      if (!info) continue;
-
-      if (!inAnyRange(info.lineStart)) continue;
-
-      const entry = cached.byStart.get(info.lineStart);
-      if (entry) {
-        // Replace this block with our card
-        const card = renderCardDom(plugin.app, af, entry);
-        child.replaceWith(card);
-      } else {
-        // This block is part of a timeline entry (likely indented body); remove it.
-        child.remove();
+      const mtime = af.stat.mtime;
+      let cached = cache.get(sourcePath);
+      if (!cached || cached.mtime !== mtime) {
+        const md = await plugin.app.vault.read(af);
+        const entries = parseEntriesFromMarkdown(md);
+        const byStart = new Map<number, ParsedEntry>();
+        for (const e of entries) byStart.set(e.lineStart, e);
+        cached = { mtime, entries, byStart };
+        cache.set(sourcePath, cached);
       }
-    }
-  }, 200);
+
+      if (cached.entries.length === 0) return;
+
+      const ranges = cached.entries.map((e) => ({ start: e.lineStart, end: e.lineEnd }));
+
+      const inAnyRange = (line: number): boolean => {
+        for (const r of ranges) {
+          if (line >= r.start && line <= r.end) return true;
+        }
+        return false;
+      };
+
+      // In preview mode, timeline entries may render inside list items.
+      const candidates = Array.from(el.querySelectorAll("li, p"));
+      const blocks = candidates.length > 0 ? candidates : Array.from(el.children);
+
+      for (const child of blocks) {
+        const info = ctx.getSectionInfo(child as HTMLElement);
+        if (!info) continue;
+
+        if (!inAnyRange(info.lineStart)) continue;
+
+        const entry = cached.byStart.get(info.lineStart);
+        if (entry) {
+          const card = renderCardDom(plugin.app, af, entry);
+          child.replaceWith(card);
+        } else {
+          // Part of timeline entry body; remove duplicate rendered lines.
+          child.remove();
+        }
+      }
+    },
+    200
+  );
 }

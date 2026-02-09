@@ -1,6 +1,7 @@
 // ============================================================================
 // Timeline Editor Extension (CodeMirror)
-// TEST: Adding back editorInfoField access
+//
+// Lightweight timestamp tinting in raw editor lines.
 // ============================================================================
 
 import {
@@ -13,15 +14,14 @@ import {
 import { Extension, RangeSetBuilder } from "@codemirror/state";
 import { editorInfoField } from "obsidian";
 import { TemporalDriftSettings } from "../types";
-
-const TIMESTAMP_REGEX = /^(\d{2}):(\d{2})\b/;
+import { parseTimelineLine } from "../parsing/timeline";
+import { pathInFolder } from "../utils/folder-match";
 
 const timestampMark = Decoration.mark({
   class: "td-timestamp",
 });
 
 function buildDecorations(view: EditorView, settings: TemporalDriftSettings): DecorationSet {
-  // Guard: view must be ready
   if (!view.state || !view.visibleRanges || view.visibleRanges.length === 0) {
     return Decoration.none;
   }
@@ -36,11 +36,10 @@ function buildDecorations(view: EditorView, settings: TemporalDriftSettings): De
   }
 
   // Only apply to daily notes
-  if (!filePath || !filePath.startsWith(settings.dailyNotesFolder)) {
+  if (!filePath || !pathInFolder(filePath, settings.dailyNotesFolder, ["Daily notes"])) {
     return Decoration.none;
   }
 
-  // Build simple timestamp decorations
   const builder = new RangeSetBuilder<Decoration>();
 
   for (const { from, to } of view.visibleRanges) {
@@ -49,9 +48,13 @@ function buildDecorations(view: EditorView, settings: TemporalDriftSettings): De
       const line = view.state.doc.lineAt(pos);
       if (line.from > to) break;
 
-      const match = line.text.match(TIMESTAMP_REGEX);
-      if (match) {
-        builder.add(line.from, line.from + 5, timestampMark);
+      const parsed = parseTimelineLine(line.text);
+      if (parsed) {
+        const startInLine = line.text.indexOf(parsed.timeText);
+        if (startInLine >= 0) {
+          const start = line.from + startInLine;
+          builder.add(start, start + parsed.timeText.length, timestampMark);
+        }
       }
 
       pos = line.to + 1;
@@ -66,17 +69,12 @@ function createTimelineExtension(settings: TemporalDriftSettings): Extension {
     class TimelineDecorations {
       decorations: DecorationSet = Decoration.none;
 
-      constructor(_view: EditorView) {
-        // Don't build in constructor
-      }
-
       update(update: ViewUpdate): void {
         try {
           if (update.docChanged || update.viewportChanged || this.decorations === Decoration.none) {
             this.decorations = buildDecorations(update.view, settings);
           }
-        } catch (e) {
-          console.warn("[TD] timeline update error:", e);
+        } catch {
           this.decorations = Decoration.none;
         }
       }
