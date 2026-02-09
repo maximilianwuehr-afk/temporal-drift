@@ -3,6 +3,8 @@
 // ============================================================================
 
 import { App, Notice, TAbstractFile, TFile, debounce, normalizePath, requestUrl } from "obsidian";
+import http from "http";
+import crypto from "crypto";
 import { GoogleTasksToken, TemporalDriftSettings, TaskMeta } from "../types";
 import { TaskIndexService } from "./task-index";
 
@@ -60,6 +62,18 @@ function isoDay(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
+function base64Url(buf: Buffer): string {
+  return buf
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function sha256Base64Url(input: string): string {
+  return base64Url(crypto.createHash("sha256").update(input).digest());
+}
+
 export class GoogleTasksSyncService {
   private app: App;
   private settings: TemporalDriftSettings;
@@ -72,7 +86,8 @@ export class GoogleTasksSyncService {
   private onTokenUpdate: (token: GoogleTasksToken | null) => Promise<void>;
 
   // OAuth
-  private readonly redirectUri = "obsidian://temporal-drift-oauth";
+  // Use loopback redirect (http://127.0.0.1:<port>/oauth2callback) + PKCE.
+  // Custom URI schemes are restricted by Google and are not reliable.
 
   constructor(
     app: App,
@@ -99,39 +114,119 @@ export class GoogleTasksSyncService {
   }
 
   isConfigured(): boolean {
-    return !!(
-      this.settings.googleTasksEnabled &&
-      this.settings.googleTasksClientId &&
-      this.settings.googleTasksClientSecret &&
-      this.token
-    );
+    return !!(this.settings.googleTasksEnabled && this.settings.googleTasksClientId && this.token);
   }
 
-  getAuthUrl(): string {
+  private buildAuthUrl(opts: { redirectUri: string; codeChallenge: string }): string {
     const scope = "https://www.googleapis.com/auth/tasks";
+
     return (
       `https://accounts.google.com/o/oauth2/v2/auth?` +
       `client_id=${encodeURIComponent(this.settings.googleTasksClientId)}&` +
-      `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
+      `redirect_uri=${encodeURIComponent(opts.redirectUri)}&` +
       `response_type=code&` +
       `scope=${encodeURIComponent(scope)}&` +
       `access_type=offline&` +
-      `prompt=consent`
+      `prompt=consent&` +
+      `code_challenge=${encodeURIComponent(opts.codeChallenge)}&` +
+      `code_challenge_method=S256`
     );
   }
 
-  async handleAuthCode(code: string): Promise<void> {
+  /**
+   * Starts a loopback OAuth flow (PKCE). Opens the consent screen in the user's browser,
+   * captures the authorization code via a temporary localhost server, and stores tokens.
+   */
+  async beginAuthFlow(openUrl: (url: string) => void): Promise<void> {
+    if (!this.settings.googleTasksClientId) {
+      new Notice("[Temporal Drift] Missing Google Client ID", 4000);
+      return;
+    }
+
+    const verifier = base64Url(crypto.randomBytes(32));
+    const challenge = sha256Base64Url(verifier);
+
+    const server = http.createServer();
+
+    const codePromise = new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("OAuth timeout"));
+      }, 3 * 60_000);
+
+      server.on("request", (req, res) => {
+        try {
+          const url = new URL(req.url ?? "/", "http://127.0.0.1");
+          const code = url.searchParams.get("code");
+          const err = url.searchParams.get("error");
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+
+          if (err) {
+            res.end(`<h3>Authorization failed</h3><p>${err}</p><p>You may close this window.</p>`);
+            clearTimeout(timeout);
+            reject(new Error(String(err)));
+            return;
+          }
+
+          if (!code) {
+            res.end("<p>Waiting for authorization…</p>");
+            return;
+          }
+
+          res.end("<h3>Connected.</h3><p>You may close this window and return to Obsidian.</p>");
+
+          const address = server.address();
+          const port = typeof address === "object" && address ? address.port : 0;
+          const redirectUri = `http://127.0.0.1:${port}/oauth2callback`;
+
+          clearTimeout(timeout);
+          resolve({ code, redirectUri });
+        } catch (e) {
+          clearTimeout(timeout);
+          reject(e);
+        }
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.on("error", reject);
+    });
+
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const redirectUri = `http://127.0.0.1:${port}/oauth2callback`;
+
+    openUrl(this.buildAuthUrl({ redirectUri, codeChallenge: challenge }));
+
+    try {
+      const { code: authCode, redirectUri: finalRedirect } = await codePromise;
+      await this.exchangeAuthCode({ code: authCode, redirectUri: finalRedirect, verifier });
+    } finally {
+      server.close();
+    }
+  }
+
+  private async exchangeAuthCode(opts: { code: string; redirectUri: string; verifier: string }): Promise<void> {
+    const body = new URLSearchParams({
+      client_id: this.settings.googleTasksClientId,
+      code: opts.code,
+      code_verifier: opts.verifier,
+      grant_type: "authorization_code",
+      redirect_uri: opts.redirectUri,
+    });
+
+    // Client secret is optional (desktop apps shouldn't rely on it, but allow it for compatibility).
+    if (this.settings.googleTasksClientSecret?.trim()) {
+      body.set("client_secret", this.settings.googleTasksClientSecret.trim());
+    }
+
     const response = await requestUrl({
       url: "https://oauth2.googleapis.com/token",
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: this.settings.googleTasksClientId,
-        client_secret: this.settings.googleTasksClientSecret,
-        code,
-        grant_type: "authorization_code",
-        redirect_uri: this.redirectUri,
-      }).toString(),
+      body: body.toString(),
     });
 
     const data = response.json as any;
@@ -162,16 +257,21 @@ export class GoogleTasksSyncService {
   private async refreshToken(): Promise<void> {
     if (!this.token?.refresh_token) throw new Error("No refresh token");
 
+    const body = new URLSearchParams({
+      client_id: this.settings.googleTasksClientId,
+      refresh_token: this.token.refresh_token,
+      grant_type: "refresh_token",
+    });
+
+    if (this.settings.googleTasksClientSecret?.trim()) {
+      body.set("client_secret", this.settings.googleTasksClientSecret.trim());
+    }
+
     const response = await requestUrl({
       url: "https://oauth2.googleapis.com/token",
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: this.settings.googleTasksClientId,
-        client_secret: this.settings.googleTasksClientSecret,
-        refresh_token: this.token.refresh_token,
-        grant_type: "refresh_token",
-      }).toString(),
+      body: body.toString(),
     });
 
     const data = response.json as any;
