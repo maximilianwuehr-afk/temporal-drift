@@ -2,9 +2,96 @@
 // Temporal Drift Commands
 // ============================================================================
 
-import { Editor, MarkdownView, MarkdownFileInfo } from "obsidian";
+import { Editor, MarkdownView, MarkdownFileInfo, Notice, TFile, normalizePath } from "obsidian";
 import type TemporalDriftPlugin from "./main";
 import { formatTime, formatDate } from "./utils/time";
+import { pathInFolder } from "./utils/folder-match";
+import { parseTaskSnapshotFromContent, taskLinkMatches, TaskSnapshot } from "./services/task-allocation-utils";
+import { parseTimelineLine, parseTaskHead } from "./parsing/timeline";
+
+type TaskAllocation = { dayPath: string; day: string; time: string };
+
+type BacklinksForFile = { data?: Record<string, unknown> };
+
+function getBacklinkSourcePaths(plugin: TemporalDriftPlugin, file: TFile): string[] {
+  const getBacklinksForFile = (plugin.app.metadataCache as any).getBacklinksForFile as
+    | ((file: TFile) => BacklinksForFile)
+    | undefined;
+
+  const backlinks = getBacklinksForFile?.(file);
+  return backlinks?.data ? Object.keys(backlinks.data) : [];
+}
+
+function getAllocationCandidates(plugin: TemporalDriftPlugin, taskFile: TFile): TFile[] {
+  const sources = getBacklinkSourcePaths(plugin, taskFile);
+
+  const candidates: TFile[] = [];
+  for (const p of sources) {
+    const f = plugin.app.vault.getAbstractFileByPath(p);
+    if (f instanceof TFile && f.extension === "md") {
+      if (pathInFolder(f.path, plugin.settings.dailyNotesFolder, ["Daily notes"])) {
+        candidates.push(f);
+      }
+    }
+  }
+
+  if (candidates.length > 0) return candidates;
+
+  // Fallback: scan daily notes folder.
+  const prefix = normalizePath(plugin.settings.dailyNotesFolder + "/");
+  return plugin.app.vault
+    .getMarkdownFiles()
+    .filter((f) => normalizePath(f.path).startsWith(prefix));
+}
+
+function parseAllocationsFromDailyNote(content: string, dayPath: string, taskPath: string): TaskAllocation[] {
+  const day = dayPath.split("/").pop()?.replace(/\.md$/i, "") ?? dayPath;
+  const out: TaskAllocation[] = [];
+
+  for (const line of content.split("\n")) {
+    const parsed = parseTimelineLine(line);
+    if (!parsed) continue;
+
+    if (!parseTaskHead(parsed.headRaw).isTask) continue;
+
+    const link = parsed.headRaw.match(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/);
+    if (!link?.[1]) continue;
+
+    if (!taskLinkMatches(link[1].trim(), taskPath)) continue;
+
+    const time = parsed.timeText.split("–")[0]?.trim() || parsed.timeText;
+    out.push({ dayPath, day, time });
+  }
+
+  return out;
+}
+
+async function computeAllocations(plugin: TemporalDriftPlugin, taskFile: TFile): Promise<TaskAllocation[]> {
+  const files = getAllocationCandidates(plugin, taskFile);
+  const all: TaskAllocation[] = [];
+
+  for (const f of files) {
+    try {
+      const content = await plugin.app.vault.read(f);
+      all.push(...parseAllocationsFromDailyNote(content, f.path, taskFile.path));
+    } catch {
+      // ignore
+    }
+  }
+
+  // De-dupe
+  const seen = new Set<string>();
+  return all.filter((a) => {
+    const key = `${a.dayPath}#${a.time}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function canonicalStatus(snapshot: TaskSnapshot): "open" | "done" {
+  return snapshot.done ? "done" : "open";
+}
 
 export function registerCommands(plugin: TemporalDriftPlugin): void {
   // Add inline note with timestamp
@@ -48,6 +135,66 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
         editor.replaceRange(`\n\n${insertion}`, endOfLine);
         editor.setCursor({ line: cursor.line + 2, ch: insertion.length });
       }
+    },
+  });
+
+  // Migrate Tasks/ notes to canonical frontmatter schema
+  plugin.addCommand({
+    id: "migrate-task-schema",
+    name: "Migrate task schema (frontmatter)",
+    callback: async () => {
+      const tasksPrefix = normalizePath(plugin.settings.tasksFolder + "/");
+      const taskFiles = plugin.app.vault
+        .getMarkdownFiles()
+        .filter((f) => normalizePath(f.path).startsWith(tasksPrefix))
+        .sort((a, b) => a.path.localeCompare(b.path));
+
+      let updated = 0;
+      let failed = 0;
+
+      new Notice(`[Temporal Drift] Migrating ${taskFiles.length} task notes…`, 2500);
+
+      for (const file of taskFiles) {
+        try {
+          const content = await plugin.app.vault.read(file);
+          const cache = plugin.app.metadataCache.getFileCache(file);
+          const fm = cache?.frontmatter as Record<string, unknown> | undefined;
+          const snapshot = parseTaskSnapshotFromContent(content, fm);
+
+          const priority = snapshot.priority ?? plugin.settings.defaultPriority;
+          const allocations = await computeAllocations(plugin, file);
+
+          await plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
+            frontmatter.status = canonicalStatus({ ...snapshot, priority });
+            frontmatter.done = snapshot.done;
+            frontmatter.priority = priority;
+
+            const existing = (frontmatter as any).allocations;
+            if (Array.isArray(existing)) {
+              const merged = [...existing, ...allocations];
+              const seen = new Set<string>();
+              (frontmatter as any).allocations = merged.filter((a: any) => {
+                const dayPath = String(a?.dayPath ?? a?.path ?? "");
+                const time = String(a?.time ?? "");
+                const key = `${dayPath}#${time}`;
+                if (!dayPath || !time) return false;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              });
+            } else {
+              (frontmatter as any).allocations = allocations;
+            }
+          });
+
+          updated++;
+        } catch (err) {
+          failed++;
+          console.error("[Temporal Drift] migrate-task-schema failed", file.path, err);
+        }
+      }
+
+      new Notice(`[Temporal Drift] Task migration complete: ${updated} updated, ${failed} failed.`, 6000);
     },
   });
 
