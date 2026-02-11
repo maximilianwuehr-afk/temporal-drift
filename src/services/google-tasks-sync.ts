@@ -7,6 +7,7 @@ import http from "http";
 import crypto from "crypto";
 import { GoogleTasksToken, TemporalDriftSettings, TaskMeta, GoogleTasksSyncStatus, GoogleTasksSyncStats } from "../types";
 import { TaskIndexService } from "./task-index";
+import { decideSyncPair } from "./google-sync-planner";
 
 type RemoteTaskStatus = "needsAction" | "completed";
 
@@ -812,7 +813,15 @@ export class GoogleTasksSyncService {
         const remoteModified = new Date(remote.updated).getTime();
         const statesAlreadyMatch = this.remoteMatchesLocal(local, remote);
 
-        if (localModified > lastSynced && remoteModified > lastSynced) {
+        const decision = decideSyncPair({
+          remoteExists: true,
+          statesMatch: statesAlreadyMatch,
+          localModified,
+          remoteModified,
+          lastSynced,
+        });
+
+        if (decision.conflict) {
           stats.conflicts += 1;
           this.logSyncDecision("conflict_detected", {
             path: file.path,
@@ -820,63 +829,49 @@ export class GoogleTasksSyncService {
             localModified,
             remoteModified,
             lastSynced,
+            decision: decision.reason,
             strategy: "local_wins",
           });
         }
 
-        if (localModified > lastSynced) {
-          if (statesAlreadyMatch) {
-            await this.writeSyncMeta(file, {
-              id: remote.id,
-              etag: remote.etag,
-              lastSynced: this.computeSyncStamp(file, local),
-            });
-            stats.remoteNoops += 1;
-            this.logSyncDecision("remote_noop", {
-              path: file.path,
-              taskId: remote.id,
-              reason: "already_equal",
-            });
-          } else {
-            const before = local.googleEtag ?? remote.etag;
-            const next = await this.pushLocalToRemote(file, local, remote, listId);
-            if (next.etag !== before) stats.remotePatches += 1;
-          }
+        if (decision.action === "push_local") {
+          const before = local.googleEtag ?? remote.etag;
+          const next = await this.pushLocalToRemote(file, local, remote, listId);
+          if (next.etag !== before) stats.remotePatches += 1;
+          else stats.remoteNoops += 1;
           continue;
         }
 
-        if (remoteModified > lastSynced) {
-          if (statesAlreadyMatch) {
-            await this.writeSyncMeta(file, {
-              id: remote.id,
-              etag: remote.etag,
-              lastSynced: this.computeSyncStamp(file, local),
-            });
-            stats.localNoops += 1;
-            this.logSyncDecision("local_noop", {
-              path: file.path,
-              taskId: remote.id,
-              reason: "already_equal",
-            });
-          } else {
-            await this.applyRemoteToLocal(file, remote, listId);
-            stats.localPulls += 1;
-            this.logSyncDecision("local_apply", {
-              path: file.path,
-              taskId: remote.id,
-            });
-          }
+        if (decision.action === "pull_remote") {
+          await this.applyRemoteToLocal(file, remote, listId);
+          stats.localPulls += 1;
+          this.logSyncDecision("local_apply", {
+            path: file.path,
+            taskId: remote.id,
+            reason: decision.reason,
+          });
           continue;
         }
 
-        // No timestamp-based change; still normalize sync metadata if stale.
-        if (statesAlreadyMatch && (local.googleEtag !== remote.etag || (local.googleLastSynced ?? 0) < file.stat.mtime)) {
+        if (decision.action === "noop") {
           await this.writeSyncMeta(file, {
             id: remote.id,
             etag: remote.etag,
             lastSynced: this.computeSyncStamp(file, local),
           });
-          stats.localNoops += 1;
+
+          if (decision.reason.startsWith("local_") || decision.reason === "both_changed_but_equal") {
+            stats.remoteNoops += 1;
+          } else {
+            stats.localNoops += 1;
+          }
+
+          this.logSyncDecision("sync_noop", {
+            path: file.path,
+            taskId: remote.id,
+            reason: decision.reason,
+          });
+          continue;
         }
       }
 
