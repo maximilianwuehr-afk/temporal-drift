@@ -232,6 +232,19 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     },
   });
 
+  plugin.addCommand({
+    id: "google-tasks-preview-sync-changes",
+    name: "Google Tasks: Preview sync changes",
+    callback: async () => {
+      try {
+        const summary = (await (plugin as any).previewGoogleTasksSync?.()) as string | undefined;
+        new Notice(summary || "No preview available.", 9000);
+      } catch (error) {
+        new Notice(`[Temporal Drift] Preview failed: ${String((error as any)?.message ?? error)}`, 5000);
+      }
+    },
+  });
+
   // Quick capture to today's note
   plugin.addCommand({
     id: "quick-capture",

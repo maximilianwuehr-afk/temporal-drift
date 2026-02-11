@@ -26,6 +26,28 @@ interface GoogleTaskList {
   title: string;
 }
 
+export type GoogleTasksPreviewAction =
+  | "create_remote"
+  | "update_remote"
+  | "update_local"
+  | "create_local"
+  | "noop"
+  | "conflict";
+
+export interface GoogleTasksPreviewItem {
+  action: GoogleTasksPreviewAction;
+  path: string;
+  taskId?: string;
+  reason?: string;
+}
+
+export interface GoogleTasksPreviewResult {
+  listId: string;
+  generatedAt: number;
+  counts: Record<GoogleTasksPreviewAction, number>;
+  items: GoogleTasksPreviewItem[];
+}
+
 function sanitizeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "-").trim();
 }
@@ -106,6 +128,17 @@ function emptySyncStats(): GoogleTasksSyncStats {
     localPulls: 0,
     localNoops: 0,
     conflicts: 0,
+  };
+}
+
+function emptyPreviewCounts(): Record<GoogleTasksPreviewAction, number> {
+  return {
+    create_remote: 0,
+    update_remote: 0,
+    update_local: 0,
+    create_local: 0,
+    noop: 0,
+    conflict: 0,
   };
 }
 
@@ -721,6 +754,28 @@ export class GoogleTasksSyncService {
     }
   }
 
+  private suggestLocalPathForRemote(remote: GoogleTask, occupied?: Set<string>): string {
+    const decoded = decodeTaskTitle(remote.title);
+    const safe = sanitizeFileName(decoded.title) || `Google Task ${isoDay(new Date())}`;
+
+    let path = normalizePath(`${this.settings.tasksFolder}/${safe}.md`);
+    const baseId = sanitizeFileName(remote.id).slice(0, 8) || String(Date.now());
+    let bump = 0;
+
+    const isTaken = (candidate: string): boolean => {
+      if (occupied?.has(candidate)) return true;
+      return this.app.vault.getAbstractFileByPath(candidate) instanceof TFile;
+    };
+
+    while (isTaken(path)) {
+      bump += 1;
+      const suffix = bump === 1 ? baseId : `${baseId}-${bump}`;
+      path = normalizePath(`${this.settings.tasksFolder}/${safe} (${suffix}).md`);
+    }
+
+    return path;
+  }
+
   private async ensureLocalFromRemote(remote: GoogleTask): Promise<TFile | null> {
     const mappedPath = parseObsidianPathFromNotes(remote.notes);
     if (mappedPath) {
@@ -732,17 +787,7 @@ export class GoogleTasksSyncService {
     const decoded = decodeTaskTitle(remote.title);
     const done = parseRemoteDone(remote.status);
 
-    const safe = sanitizeFileName(decoded.title) || `Google Task ${isoDay(new Date())}`;
-
-    // Collision-safe local file creation: if title path exists, suffix with remote id fragment.
-    let path = normalizePath(`${this.settings.tasksFolder}/${safe}.md`);
-    const baseId = sanitizeFileName(remote.id).slice(0, 8) || String(Date.now());
-    let bump = 0;
-    while (this.app.vault.getAbstractFileByPath(path) instanceof TFile) {
-      bump += 1;
-      const suffix = bump === 1 ? baseId : `${baseId}-${bump}`;
-      path = normalizePath(`${this.settings.tasksFolder}/${safe} (${suffix}).md`);
-    }
+    const path = this.suggestLocalPathForRemote(remote);
 
     const checkbox = done ? "[x]" : "[ ]";
     const priority = decoded.priority ? ` #${decoded.priority}` : "";
@@ -754,8 +799,129 @@ export class GoogleTasksSyncService {
   }
 
   // ---------------------------------------------------------------------------
-  // Main sync loop
+  // Preview + main sync loop
   // ---------------------------------------------------------------------------
+
+  async previewSyncPlan(): Promise<GoogleTasksPreviewResult> {
+    if (!this.isConfigured()) {
+      throw new Error("Google Tasks sync is not configured");
+    }
+
+    const listId = await this.resolveListId();
+    const remoteTasks = await this.fetchRemoteTasks(listId);
+    const remoteById = new Map(remoteTasks.map((t) => [t.id, t]));
+
+    const counts = emptyPreviewCounts();
+    const items: GoogleTasksPreviewItem[] = [];
+
+    const localFiles = this.getLocalTaskFiles();
+    const occupiedLocalPaths = new Set(localFiles.map((f) => f.path));
+
+    for (const file of localFiles) {
+      const local = this.getLocalTaskMeta(file);
+      if (!this.isTaskFile(file)) continue;
+
+      let remote: GoogleTask | undefined;
+
+      if (local.googleTaskId) {
+        remote = remoteById.get(local.googleTaskId);
+      }
+
+      if (!remote) {
+        remote = remoteTasks.find((t) => parseObsidianPathFromNotes(t.notes) === file.path);
+      }
+
+      if (!remote) {
+        counts.create_remote += 1;
+        items.push({ action: "create_remote", path: file.path, reason: "remote_missing" });
+        continue;
+      }
+
+      const lastSynced = local.googleLastSynced ?? 0;
+      const localModified = file.stat.mtime;
+      const remoteModified = new Date(remote.updated).getTime();
+      const statesAlreadyMatch = this.remoteMatchesLocal(local, remote);
+
+      const decision = decideSyncPair({
+        remoteExists: true,
+        statesMatch: statesAlreadyMatch,
+        localModified,
+        remoteModified,
+        lastSynced,
+      });
+
+      if (decision.conflict) {
+        counts.conflict += 1;
+      }
+
+      if (decision.action === "push_local") {
+        counts.update_remote += 1;
+        items.push({
+          action: "update_remote",
+          path: file.path,
+          taskId: remote.id,
+          reason: decision.reason,
+        });
+        continue;
+      }
+
+      if (decision.action === "pull_remote") {
+        counts.update_local += 1;
+        items.push({
+          action: "update_local",
+          path: file.path,
+          taskId: remote.id,
+          reason: decision.reason,
+        });
+        continue;
+      }
+
+      counts.noop += 1;
+      items.push({
+        action: "noop",
+        path: file.path,
+        taskId: remote.id,
+        reason: decision.reason,
+      });
+    }
+
+    for (const remote of remoteTasks) {
+      const mappedPath = parseObsidianPathFromNotes(remote.notes);
+      if (mappedPath && occupiedLocalPaths.has(mappedPath)) continue;
+
+      const suggested = this.suggestLocalPathForRemote(remote, occupiedLocalPaths);
+      occupiedLocalPaths.add(suggested);
+
+      counts.create_local += 1;
+      items.push({
+        action: "create_local",
+        path: suggested,
+        taskId: remote.id,
+        reason: "remote_unmapped",
+      });
+    }
+
+    return {
+      listId,
+      generatedAt: Date.now(),
+      counts,
+      items,
+    };
+  }
+
+  formatPreviewSummary(preview: GoogleTasksPreviewResult): string {
+    const c = preview.counts;
+    return [
+      `Google Tasks preview (${new Date(preview.generatedAt).toLocaleString()})`,
+      `List: ${preview.listId}`,
+      `create_remote: ${c.create_remote}`,
+      `update_remote: ${c.update_remote}`,
+      `update_local: ${c.update_local}`,
+      `create_local: ${c.create_local}`,
+      `conflict: ${c.conflict}`,
+      `noop: ${c.noop}`,
+    ].join("\n");
+  }
 
   async syncAll(): Promise<void> {
     if (!this.isConfigured() || this.syncInProgress) return;
