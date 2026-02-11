@@ -223,6 +223,15 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     },
   });
 
+  plugin.addCommand({
+    id: "google-tasks-show-sync-status",
+    name: "Google Tasks: Show sync status",
+    callback: async () => {
+      const summary = (plugin as any).formatGoogleTasksSyncStatus?.() as string | undefined;
+      new Notice(summary || "No Google Tasks sync status available yet.", 8000);
+    },
+  });
+
   // Quick capture to today's note
   plugin.addCommand({
     id: "quick-capture",

@@ -5,7 +5,7 @@
 import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import { Extension } from "@codemirror/state";
 
-import { DEFAULT_SETTINGS, TemporalDriftSettings } from "./types";
+import { DEFAULT_SETTINGS, TemporalDriftSettings, GoogleTasksSyncStatus } from "./types";
 import { TemporalDriftSettingTab } from "./settings";
 import { TimelineExtension } from "./editor/timeline-extension";
 import { TimelineLivePreviewExtension } from "./editor/timeline-live-preview";
@@ -34,6 +34,15 @@ export default class TemporalDriftPlugin extends Plugin {
   private taskIndex: TaskIndexService | null = null;
   private googleTasksSync: GoogleTasksSyncService | null = null;
   private googleTasksIntervalId: number | null = null;
+  private googleTasksSyncStatus: GoogleTasksSyncStatus = {
+    state: "idle",
+    inProgress: false,
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    lastSuccessAt: null,
+    lastError: null,
+    lastStats: null,
+  };
 
   async onload() {
     await this.loadSettings();
@@ -52,6 +61,9 @@ export default class TemporalDriftPlugin extends Plugin {
       onTokenUpdate: async (token) => {
         this.settings.googleTasksToken = token;
         await this.saveSettings();
+      },
+      onStatusUpdate: (status) => {
+        this.googleTasksSyncStatus = status;
       },
     });
 
@@ -248,6 +260,35 @@ export default class TemporalDriftPlugin extends Plugin {
 
   async listGoogleTaskLists(): Promise<Array<{ id: string; title: string }>> {
     return (await this.googleTasksSync?.listTaskLists()) ?? [];
+  }
+
+  getGoogleTasksSyncStatus(): GoogleTasksSyncStatus {
+    return this.googleTasksSync?.getStatus() ?? this.googleTasksSyncStatus;
+  }
+
+  formatGoogleTasksSyncStatus(): string {
+    const s = this.getGoogleTasksSyncStatus();
+    const fmt = (ts: number | null): string => (ts ? new Date(ts).toLocaleString() : "—");
+    const stateLabel = s.inProgress ? "running" : s.state;
+
+    const parts = [
+      `State: ${stateLabel}`,
+      `Last started: ${fmt(s.lastStartedAt)}`,
+      `Last success: ${fmt(s.lastSuccessAt)}`,
+      `Last finished: ${fmt(s.lastFinishedAt)}`,
+    ];
+
+    if (s.lastError) {
+      parts.push(`Last error: ${s.lastError}`);
+    }
+
+    if (s.lastStats) {
+      parts.push(
+        `Stats: remote +${s.lastStats.remoteCreates}/~${s.lastStats.remotePatches}/=${s.lastStats.remoteNoops}, local +${s.lastStats.localCreates}/~${s.lastStats.localPulls}/=${s.lastStats.localNoops}, conflicts ${s.lastStats.conflicts}`
+      );
+    }
+
+    return parts.join("\n");
   }
 
   private async activateTaskPool(): Promise<void> {
