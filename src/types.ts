@@ -12,6 +12,26 @@ export interface GoogleTasksToken {
   expires_at: number;
 }
 
+export interface GoogleTasksSyncStats {
+  remoteCreates: number;
+  remotePatches: number;
+  remoteNoops: number;
+  localCreates: number;
+  localPulls: number;
+  localNoops: number;
+  conflicts: number;
+}
+
+export interface GoogleTasksSyncStatus {
+  state: "idle" | "running" | "success" | "failed";
+  inProgress: boolean;
+  lastStartedAt: number | null;
+  lastFinishedAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+  lastStats: GoogleTasksSyncStats | null;
+}
+
 export interface TemporalDriftSettings {
   dailyNotesFolder: string;
   tasksFolder: string;

@@ -7,13 +7,23 @@ import type TemporalDriftPlugin from "./main";
 
 export class TemporalDriftSettingTab extends PluginSettingTab {
   plugin: TemporalDriftPlugin;
+  private statusIntervalId: number | null = null;
 
   constructor(app: App, plugin: TemporalDriftPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  private clearStatusInterval(): void {
+    if (this.statusIntervalId !== null) {
+      window.clearInterval(this.statusIntervalId);
+      this.statusIntervalId = null;
+    }
+  }
+
   display(): void {
+    this.clearStatusInterval();
+
     const { containerEl } = this;
     containerEl.empty();
 
@@ -204,6 +214,50 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
           })
       );
 
+    const statusSetting = new Setting(containerEl)
+      .setName("Sync status")
+      .setDesc("Last run details, sync result, and current state.");
+
+    const renderStatus = () => {
+      const status = this.plugin.getGoogleTasksSyncStatus();
+      const fmt = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : "—");
+      const state = status.inProgress ? "running" : status.state;
+      const lines = [
+        `State: ${state}`,
+        `Last started: ${fmt(status.lastStartedAt)}`,
+        `Last success: ${fmt(status.lastSuccessAt)}`,
+        `Last finished: ${fmt(status.lastFinishedAt)}`,
+      ];
+
+      if (status.lastError) {
+        lines.push(`Last error: ${status.lastError}`);
+      }
+
+      if (status.lastStats) {
+        lines.push(
+          `Stats: remote +${status.lastStats.remoteCreates}/~${status.lastStats.remotePatches}/=${status.lastStats.remoteNoops}, local +${status.lastStats.localCreates}/~${status.lastStats.localPulls}/=${status.lastStats.localNoops}, conflicts ${status.lastStats.conflicts}`
+        );
+      }
+
+      statusSetting.setDesc(lines.join("\n"));
+    };
+
+    renderStatus();
+
+    this.statusIntervalId = window.setInterval(() => {
+      if (!this.containerEl.isConnected) {
+        this.clearStatusInterval();
+        return;
+      }
+      renderStatus();
+    }, 1000);
+
+    statusSetting.addButton((btn) =>
+      btn.setButtonText("Refresh").onClick(() => {
+        renderStatus();
+      })
+    );
+
     new Setting(containerEl)
       .setName("Actions")
       .setDesc("Connect, sync now, or disconnect.")
@@ -213,18 +267,25 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
           .setCta()
           .onClick(async () => {
             await this.plugin.connectGoogleTasks();
+            renderStatus();
           })
       )
       .addButton((btn) =>
         btn.setButtonText("Sync now").onClick(async () => {
           await this.plugin.syncGoogleTasksNow();
+          renderStatus();
         })
       )
       .addButton((btn) =>
         btn.setButtonText("Disconnect").onClick(async () => {
           await this.plugin.disconnectGoogleTasks();
+          renderStatus();
           new Notice("[Temporal Drift] Disconnected Google Tasks", 2500);
         })
       );
+  }
+
+  hide(): void {
+    this.clearStatusInterval();
   }
 }

@@ -5,7 +5,7 @@
 import { App, Notice, TAbstractFile, TFile, debounce, normalizePath, requestUrl } from "obsidian";
 import http from "http";
 import crypto from "crypto";
-import { GoogleTasksToken, TemporalDriftSettings, TaskMeta } from "../types";
+import { GoogleTasksToken, TemporalDriftSettings, TaskMeta, GoogleTasksSyncStatus, GoogleTasksSyncStats } from "../types";
 import { TaskIndexService } from "./task-index";
 
 type RemoteTaskStatus = "needsAction" | "completed";
@@ -96,6 +96,18 @@ function sha256Base64Url(input: string): string {
   return base64Url(crypto.createHash("sha256").update(input).digest());
 }
 
+function emptySyncStats(): GoogleTasksSyncStats {
+  return {
+    remoteCreates: 0,
+    remotePatches: 0,
+    remoteNoops: 0,
+    localCreates: 0,
+    localPulls: 0,
+    localNoops: 0,
+    conflicts: 0,
+  };
+}
+
 export class GoogleTasksSyncService {
   private app: App;
   private settings: TemporalDriftSettings;
@@ -105,7 +117,18 @@ export class GoogleTasksSyncService {
   private syncInProgress = false;
   private debouncedSync: (() => void) | null = null;
 
+  private status: GoogleTasksSyncStatus = {
+    state: "idle",
+    inProgress: false,
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    lastSuccessAt: null,
+    lastError: null,
+    lastStats: null,
+  };
+
   private onTokenUpdate: (token: GoogleTasksToken | null) => Promise<void>;
+  private onStatusUpdate?: (status: GoogleTasksSyncStatus) => void | Promise<void>;
 
   // OAuth
   // Use loopback redirect (http://127.0.0.1:<port>/oauth2callback) + PKCE.
@@ -115,20 +138,49 @@ export class GoogleTasksSyncService {
     app: App,
     settings: TemporalDriftSettings,
     taskIndex: TaskIndexService,
-    opts: { onTokenUpdate: (token: GoogleTasksToken | null) => Promise<void> }
+    opts: {
+      onTokenUpdate: (token: GoogleTasksToken | null) => Promise<void>;
+      onStatusUpdate?: (status: GoogleTasksSyncStatus) => void | Promise<void>;
+    }
   ) {
     this.app = app;
     this.settings = settings;
     this.taskIndex = taskIndex;
     this.token = settings.googleTasksToken;
     this.onTokenUpdate = opts.onTokenUpdate;
+    this.onStatusUpdate = opts.onStatusUpdate;
 
     this.setupDebouncedSync();
+    this.emitStatus();
   }
 
   updateSettings(settings: TemporalDriftSettings): void {
     this.settings = settings;
     this.token = settings.googleTasksToken;
+  }
+
+  getStatus(): GoogleTasksSyncStatus {
+    return {
+      ...this.status,
+      lastStats: this.status.lastStats ? { ...this.status.lastStats } : null,
+    };
+  }
+
+  private emitStatus(): void {
+    try {
+      const current = this.getStatus();
+      void this.onStatusUpdate?.(current);
+    } catch {
+      // status hook should never break sync flow
+    }
+  }
+
+  private updateStatus(patch: Partial<GoogleTasksSyncStatus>): void {
+    this.status = {
+      ...this.status,
+      ...patch,
+    };
+    this.emitStatus();
   }
 
   private setupDebouncedSync(): void {
@@ -264,6 +316,11 @@ export class GoogleTasksSyncService {
 
   disconnect(): Promise<void> {
     this.token = null;
+    this.updateStatus({
+      state: "idle",
+      inProgress: false,
+      lastError: null,
+    });
     return this.onTokenUpdate(null);
   }
 
@@ -704,15 +761,15 @@ export class GoogleTasksSyncService {
 
     this.syncInProgress = true;
 
-    const stats = {
-      remoteCreates: 0,
-      remotePatches: 0,
-      remoteNoops: 0,
-      localCreates: 0,
-      localPulls: 0,
-      localNoops: 0,
-      conflicts: 0,
-    };
+    const stats: GoogleTasksSyncStats = emptySyncStats();
+    const startedAt = Date.now();
+
+    this.updateStatus({
+      state: "running",
+      inProgress: true,
+      lastStartedAt: startedAt,
+      lastError: null,
+    });
 
     try {
       const listId = await this.resolveListId();
@@ -846,12 +903,34 @@ export class GoogleTasksSyncService {
       }
 
       this.logSyncDecision("sync_summary", stats);
+
+      const finishedAt = Date.now();
+      this.updateStatus({
+        state: "success",
+        inProgress: false,
+        lastFinishedAt: finishedAt,
+        lastSuccessAt: finishedAt,
+        lastError: null,
+        lastStats: { ...stats },
+      });
+
       new Notice("[Temporal Drift] Google Tasks sync complete", 2000);
     } catch (e) {
+      const message = String((e as any)?.message ?? e ?? "Unknown error");
       console.error("[Temporal Drift] Google Tasks sync failed", e);
+      this.updateStatus({
+        state: "failed",
+        inProgress: false,
+        lastFinishedAt: Date.now(),
+        lastError: message,
+        lastStats: { ...stats },
+      });
       new Notice("[Temporal Drift] Google Tasks sync failed — see console", 4000);
     } finally {
       this.syncInProgress = false;
+      if (this.status.inProgress) {
+        this.updateStatus({ inProgress: false });
+      }
     }
   }
 
