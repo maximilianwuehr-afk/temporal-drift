@@ -58,6 +58,28 @@ function parseRemoteDone(status: RemoteTaskStatus): boolean {
   return status === "completed";
 }
 
+function normalizeDueDay(due?: string): string | null {
+  if (!due) return null;
+  const m = due.match(/^\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : null;
+}
+
+function encodeDueDay(due?: string): string | undefined {
+  const day = normalizeDueDay(due);
+  return day ? `${day}T00:00:00.000Z` : undefined;
+}
+
+function buildObsidianNotes(path: string, notes?: string): string {
+  const marker = `Obsidian: ${path}`;
+  if (!notes?.trim()) return marker;
+  const withoutMarker = notes
+    .split("\n")
+    .filter((line) => !/^\s*Obsidian:\s*/i.test(line))
+    .join("\n")
+    .trim();
+  return withoutMarker ? `${withoutMarker}\n${marker}` : marker;
+}
+
 function isoDay(date: Date): string {
   return date.toISOString().split("T")[0];
 }
@@ -341,9 +363,9 @@ export class GoogleTasksSyncService {
       },
       body: JSON.stringify({
         title: encodeTaskTitle(task),
-        notes: `Obsidian: ${task.path}`,
+        notes: buildObsidianNotes(task.path),
         status: task.status === "done" ? "completed" : "needsAction",
-        due: task.due ? `${task.due}T00:00:00.000Z` : undefined,
+        due: encodeDueDay(task.due),
       }),
     });
 
@@ -353,18 +375,36 @@ export class GoogleTasksSyncService {
   private async patchRemoteTask(
     listId: string,
     taskId: string,
-    patch: Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">>
+    patch: Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">>,
+    opts?: { ifMatchEtag?: string }
   ): Promise<GoogleTask> {
     const accessToken = await this.getAccessToken();
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    if (opts?.ifMatchEtag?.trim()) {
+      headers["If-Match"] = opts.ifMatchEtag.trim();
+    }
 
     const response = await requestUrl({
       url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks/${taskId}`,
       method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(patch),
+    });
+
+    return response.json as any;
+  }
+
+  private async fetchRemoteTaskById(listId: string, taskId: string): Promise<GoogleTask> {
+    const accessToken = await this.getAccessToken();
+
+    const response = await requestUrl({
+      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks/${taskId}`,
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
 
     return response.json as any;
@@ -413,7 +453,30 @@ export class GoogleTasksSyncService {
     };
   }
 
+  private computeSyncStamp(file: TFile, local?: TaskMeta): number {
+    const now = Date.now();
+    const previous = local?.googleLastSynced ?? 0;
+    // Cushion above current mtime to avoid immediate re-push after metadata writes.
+    return Math.max(now, file.stat.mtime + 2000, previous + 1);
+  }
+
   private async writeSyncMeta(file: TFile, meta: { id: string; etag: string; lastSynced: number }): Promise<void> {
+    const current = this.getFrontmatter(file);
+    const currentId = typeof current.google_task_id === "string" ? current.google_task_id : "";
+    const currentEtag = typeof current.google_etag === "string" ? current.google_etag : "";
+    const currentLastSynced = typeof current.google_last_synced === "number" ? current.google_last_synced : 0;
+
+    const doneFromStatus = typeof current.status === "string" ? String(current.status).toLowerCase() === "done" : undefined;
+    const doneNeedsWrite = typeof current.done !== "boolean" && typeof doneFromStatus === "boolean";
+
+    const idChanged = currentId !== meta.id;
+    const etagChanged = currentEtag !== meta.etag;
+    const syncChanged = currentLastSynced !== meta.lastSynced;
+
+    if (!idChanged && !etagChanged && !syncChanged && !doneNeedsWrite) {
+      return;
+    }
+
     await this.app.fileManager.processFrontMatter(file, (fm) => {
       (fm as any).google_task_id = meta.id;
       (fm as any).google_etag = meta.etag;
@@ -426,58 +489,178 @@ export class GoogleTasksSyncService {
     });
   }
 
+  private remotePayloadFromLocal(local: TaskMeta, remote?: GoogleTask): Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">> {
+    return {
+      title: encodeTaskTitle(local),
+      status: local.status === "done" ? "completed" : "needsAction",
+      due: encodeDueDay(local.due),
+      notes: buildObsidianNotes(local.path, remote?.notes),
+    };
+  }
+
+  private remoteMatchesLocal(local: TaskMeta, remote: GoogleTask): boolean {
+    const expected = this.remotePayloadFromLocal(local, remote);
+    const remoteDue = normalizeDueDay(remote.due);
+    const expectedDue = normalizeDueDay(expected.due);
+    return (
+      remote.title === expected.title &&
+      remote.status === expected.status &&
+      remoteDue === expectedDue &&
+      parseObsidianPathFromNotes(remote.notes) === local.path
+    );
+  }
+
+  private logSyncDecision(action: string, payload: Record<string, unknown>): void {
+    console.info("[Temporal Drift] Google Tasks sync decision", {
+      action,
+      ...payload,
+    });
+  }
+
+  private getHttpStatus(error: unknown): number | null {
+    const e = error as any;
+    if (typeof e?.status === "number") return e.status;
+    if (typeof e?.statusCode === "number") return e.statusCode;
+    if (typeof e?.response?.status === "number") return e.response.status;
+    const msg = String(e?.message ?? "");
+    const m = msg.match(/\b(?:HTTP|status(?: code)?)[^\d]*(\d{3})\b/i);
+    if (m) return Number(m[1]);
+    return null;
+  }
+
   private async applyRemoteToLocal(file: TFile, remote: GoogleTask, listId: string): Promise<void> {
     const decoded = decodeTaskTitle(remote.title);
     const done = parseRemoteDone(remote.status);
 
-    // Ensure the remote has a mapping note.
-    const notes = remote.notes ?? "";
-    if (!parseObsidianPathFromNotes(notes)) {
-      await this.patchRemoteTask(listId, remote.id, {
-        notes: `${notes ? notes + "\n" : ""}Obsidian: ${file.path}`,
+    // Ensure the remote has up-to-date mapping note.
+    const mappedPath = parseObsidianPathFromNotes(remote.notes);
+    if (mappedPath !== file.path) {
+      const next = await this.patchRemoteTask(
+        listId,
+        remote.id,
+        { notes: buildObsidianNotes(file.path, remote.notes) },
+        { ifMatchEtag: remote.etag }
+      );
+      remote = next;
+    }
+
+    // Update frontmatter only when it actually changes.
+    const fm = this.getFrontmatter(file);
+    const nextStatus = canonicalStatus(done);
+    const nextDone = done;
+    const nextPriority = decoded.priority;
+
+    const needsFrontmatterUpdate =
+      String(fm.status ?? "") !== nextStatus ||
+      Boolean(fm.done ?? false) !== nextDone ||
+      String(fm.priority ?? "") !== nextPriority;
+
+    if (needsFrontmatterUpdate) {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        frontmatter.status = nextStatus;
+        (frontmatter as any).done = nextDone;
+        frontmatter.priority = nextPriority;
       });
     }
 
-    // Update frontmatter
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
-      fm.status = canonicalStatus(done);
-      (fm as any).done = done;
-      fm.priority = decoded.priority;
-    });
+    // Update first checkbox line (best-effort) without write-churn on no-op.
+    const original = await this.app.vault.read(file);
+    const lines = original.split("\n");
+    const idx = lines.findIndex((l) => l.match(/^(?:\s*-\s*)?\[\s*[xX ]\s*\]/));
+    const checkbox = done ? "[x]" : "[ ]";
+    const priority = decoded.priority ? ` #${decoded.priority}` : "";
 
-    // Update first checkbox line (best-effort)
-    await this.app.vault.process(file, (content) => {
-      const lines = content.split("\n");
-      const idx = lines.findIndex((l) => l.match(/^(?:\s*-\s*)?\[\s*[xX ]\s*\]/));
-      const checkbox = done ? "[x]" : "[ ]";
-      const priority = decoded.priority ? ` #${decoded.priority}` : "";
-
-      if (idx >= 0) {
-        const rest = lines[idx].replace(/^(\s*-?\s*)\[\s*[xX ]\s*\]\s*/, "");
-        const cleaned = rest.replace(/(?:^|\s)(?:#now|#next|#later|@now|@next|@later|\[now\]|\[next\]|\[later\]|\(now\)|\(next\)|\(later\))(?=\s|$)/gi, " ")
-          .replace(/\s{2,}/g, " ")
-          .trim();
-        lines[idx] = `- ${checkbox} ${cleaned}${priority}`.trim();
-        return lines.join("\n");
-      }
-
-      // If no checkbox, prepend one.
+    let nextContent = original;
+    if (idx >= 0) {
+      const rest = lines[idx].replace(/^(\s*-?\s*)\[\s*[xX ]\s*\]\s*/, "");
+      const cleaned = rest
+        .replace(/(?:^|\s)(?:#now|#next|#later|@now|@next|@later|\[now\]|\[next\]|\[later\]|\(now\)|\(next\)|\(later\))(?=\s|$)/gi, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      lines[idx] = `- ${checkbox} ${cleaned}${priority}`.trim();
+      nextContent = lines.join("\n");
+    } else {
       const head = `- ${checkbox} ${decoded.title}${priority}`.trim();
-      return `${head}\n${content}`;
-    });
+      nextContent = `${head}\n${original}`;
+    }
 
-    await this.writeSyncMeta(file, { id: remote.id, etag: remote.etag, lastSynced: Date.now() });
+    if (nextContent !== original) {
+      await this.app.vault.modify(file, nextContent);
+    }
+
+    const localAfter = this.getLocalTaskMeta(file);
+    await this.writeSyncMeta(file, {
+      id: remote.id,
+      etag: remote.etag,
+      lastSynced: this.computeSyncStamp(file, localAfter),
+    });
   }
 
-  private async pushLocalToRemote(file: TFile, local: TaskMeta, remote: GoogleTask, listId: string): Promise<void> {
-    const next = await this.patchRemoteTask(listId, remote.id, {
-      title: encodeTaskTitle(local),
-      status: local.status === "done" ? "completed" : "needsAction",
-      due: local.due ? `${local.due}T00:00:00.000Z` : undefined,
-      notes: remote.notes ?? `Obsidian: ${local.path}`,
-    });
+  private async pushLocalToRemote(file: TFile, local: TaskMeta, remote: GoogleTask, listId: string): Promise<GoogleTask> {
+    const patch = this.remotePayloadFromLocal(local, remote);
 
-    await this.writeSyncMeta(file, { id: next.id, etag: next.etag, lastSynced: Date.now() });
+    // Avoid remote write churn when already in desired state.
+    if (this.remoteMatchesLocal(local, remote)) {
+      await this.writeSyncMeta(file, {
+        id: remote.id,
+        etag: remote.etag,
+        lastSynced: this.computeSyncStamp(file, local),
+      });
+      this.logSyncDecision("remote_noop", { path: file.path, taskId: remote.id });
+      return remote;
+    }
+
+    try {
+      const next = await this.patchRemoteTask(listId, remote.id, patch, {
+        ifMatchEtag: local.googleEtag || remote.etag,
+      });
+
+      await this.writeSyncMeta(file, {
+        id: next.id,
+        etag: next.etag,
+        lastSynced: this.computeSyncStamp(file, local),
+      });
+
+      this.logSyncDecision("remote_patch", {
+        path: file.path,
+        taskId: next.id,
+        reason: "local_changed",
+      });
+
+      return next;
+    } catch (error) {
+      const status = this.getHttpStatus(error);
+
+      // ETag race: fetch fresh, then deterministically apply local-wins once.
+      if (status === 409 || status === 412) {
+        this.logSyncDecision("remote_etag_conflict", {
+          path: file.path,
+          taskId: remote.id,
+          status,
+          strategy: "local_wins_retry_once",
+        });
+
+        const latest = await this.fetchRemoteTaskById(listId, remote.id);
+        const retried = await this.patchRemoteTask(listId, remote.id, this.remotePayloadFromLocal(local, latest), {
+          ifMatchEtag: latest.etag,
+        });
+
+        await this.writeSyncMeta(file, {
+          id: retried.id,
+          etag: retried.etag,
+          lastSynced: this.computeSyncStamp(file, local),
+        });
+
+        this.logSyncDecision("remote_patch_retry", {
+          path: file.path,
+          taskId: retried.id,
+        });
+
+        return retried;
+      }
+
+      throw error;
+    }
   }
 
   private async ensureLocalFromRemote(remote: GoogleTask): Promise<TFile | null> {
@@ -492,10 +675,16 @@ export class GoogleTasksSyncService {
     const done = parseRemoteDone(remote.status);
 
     const safe = sanitizeFileName(decoded.title) || `Google Task ${isoDay(new Date())}`;
-    const path = normalizePath(`${this.settings.tasksFolder}/${safe}.md`);
 
-    const existing = this.app.vault.getAbstractFileByPath(path);
-    if (existing instanceof TFile) return existing;
+    // Collision-safe local file creation: if title path exists, suffix with remote id fragment.
+    let path = normalizePath(`${this.settings.tasksFolder}/${safe}.md`);
+    const baseId = sanitizeFileName(remote.id).slice(0, 8) || String(Date.now());
+    let bump = 0;
+    while (this.app.vault.getAbstractFileByPath(path) instanceof TFile) {
+      bump += 1;
+      const suffix = bump === 1 ? baseId : `${baseId}-${bump}`;
+      path = normalizePath(`${this.settings.tasksFolder}/${safe} (${suffix}).md`);
+    }
 
     const checkbox = done ? "[x]" : "[ ]";
     const priority = decoded.priority ? ` #${decoded.priority}` : "";
@@ -515,6 +704,16 @@ export class GoogleTasksSyncService {
 
     this.syncInProgress = true;
 
+    const stats = {
+      remoteCreates: 0,
+      remotePatches: 0,
+      remoteNoops: 0,
+      localCreates: 0,
+      localPulls: 0,
+      localNoops: 0,
+      conflicts: 0,
+    };
+
     try {
       const listId = await this.resolveListId();
       const remoteTasks = await this.fetchRemoteTasks(listId);
@@ -523,11 +722,9 @@ export class GoogleTasksSyncService {
       // Build local set
       const localFiles = this.getLocalTaskFiles();
 
-      // First: ensure local->remote mapping exists and reconcile
+      // First: ensure local->remote mapping exists and reconcile.
       for (const file of localFiles) {
         const local = this.getLocalTaskMeta(file);
-
-        // Skip non-task notes without frontmatter status/priority
         if (!this.isTaskFile(file)) continue;
 
         // Find remote by id, or by notes mapping.
@@ -542,51 +739,113 @@ export class GoogleTasksSyncService {
         }
 
         if (!remote) {
-          // Create remote
           const created = await this.createRemoteTask(listId, local);
-          await this.writeSyncMeta(file, { id: created.id, etag: created.etag, lastSynced: Date.now() });
+          await this.writeSyncMeta(file, {
+            id: created.id,
+            etag: created.etag,
+            lastSynced: this.computeSyncStamp(file, local),
+          });
+          stats.remoteCreates += 1;
+          this.logSyncDecision("remote_create", { path: file.path, taskId: created.id });
           continue;
         }
 
         const lastSynced = local.googleLastSynced ?? 0;
         const localModified = file.stat.mtime;
         const remoteModified = new Date(remote.updated).getTime();
+        const statesAlreadyMatch = this.remoteMatchesLocal(local, remote);
 
         if (localModified > lastSynced && remoteModified > lastSynced) {
-          // Conflict: choose local (authoritative) but log.
-          console.warn("[Temporal Drift] Google Tasks conflict; choosing local", {
+          stats.conflicts += 1;
+          this.logSyncDecision("conflict_detected", {
             path: file.path,
+            taskId: remote.id,
             localModified,
             remoteModified,
             lastSynced,
+            strategy: "local_wins",
           });
         }
 
         if (localModified > lastSynced) {
-          await this.pushLocalToRemote(file, local, remote, listId);
+          if (statesAlreadyMatch) {
+            await this.writeSyncMeta(file, {
+              id: remote.id,
+              etag: remote.etag,
+              lastSynced: this.computeSyncStamp(file, local),
+            });
+            stats.remoteNoops += 1;
+            this.logSyncDecision("remote_noop", {
+              path: file.path,
+              taskId: remote.id,
+              reason: "already_equal",
+            });
+          } else {
+            const before = local.googleEtag ?? remote.etag;
+            const next = await this.pushLocalToRemote(file, local, remote, listId);
+            if (next.etag !== before) stats.remotePatches += 1;
+          }
           continue;
         }
 
         if (remoteModified > lastSynced) {
-          await this.applyRemoteToLocal(file, remote, listId);
+          if (statesAlreadyMatch) {
+            await this.writeSyncMeta(file, {
+              id: remote.id,
+              etag: remote.etag,
+              lastSynced: this.computeSyncStamp(file, local),
+            });
+            stats.localNoops += 1;
+            this.logSyncDecision("local_noop", {
+              path: file.path,
+              taskId: remote.id,
+              reason: "already_equal",
+            });
+          } else {
+            await this.applyRemoteToLocal(file, remote, listId);
+            stats.localPulls += 1;
+            this.logSyncDecision("local_apply", {
+              path: file.path,
+              taskId: remote.id,
+            });
+          }
+          continue;
+        }
+
+        // No timestamp-based change; still normalize sync metadata if stale.
+        if (statesAlreadyMatch && (local.googleEtag !== remote.etag || (local.googleLastSynced ?? 0) < file.stat.mtime)) {
+          await this.writeSyncMeta(file, {
+            id: remote.id,
+            etag: remote.etag,
+            lastSynced: this.computeSyncStamp(file, local),
+          });
+          stats.localNoops += 1;
         }
       }
 
       // Second: remote tasks that are not represented locally => create local notes.
-      const localPaths = new Set(localFiles.map((f) => f.path));
+      const localPaths = new Set(this.getLocalTaskFiles().map((f) => f.path));
 
       for (const remote of remoteTasks) {
         const mappedPath = parseObsidianPathFromNotes(remote.notes);
         if (mappedPath && localPaths.has(mappedPath)) continue;
 
-        // Create local for unmapped tasks that look like ours (or all tasks, by default)
         const localFile = await this.ensureLocalFromRemote(remote);
         if (!localFile) continue;
 
-        // Persist mapping meta and patch remote notes to include Obsidian path.
+        const existed = localPaths.has(localFile.path);
         await this.applyRemoteToLocal(localFile, remote, listId);
+        if (!existed) {
+          localPaths.add(localFile.path);
+          stats.localCreates += 1;
+          this.logSyncDecision("local_create", {
+            taskId: remote.id,
+            path: localFile.path,
+          });
+        }
       }
 
+      this.logSyncDecision("sync_summary", stats);
       new Notice("[Temporal Drift] Google Tasks sync complete", 2000);
     } catch (e) {
       console.error("[Temporal Drift] Google Tasks sync failed", e);
