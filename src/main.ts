@@ -254,6 +254,13 @@ export default class TemporalDriftPlugin extends Plugin {
     await this.googleTasksSync?.syncAll();
   }
 
+  async previewGoogleTasksSync(): Promise<string> {
+    if (!this.googleTasksSync) return "Google Tasks sync service unavailable.";
+
+    const preview = await this.googleTasksSync.previewSyncPlan();
+    return this.googleTasksSync.formatPreviewSummary(preview);
+  }
+
   async disconnectGoogleTasks(): Promise<void> {
     await this.googleTasksSync?.disconnect();
   }

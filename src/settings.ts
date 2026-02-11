@@ -277,6 +277,17 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
         })
       )
       .addButton((btn) =>
+        btn.setButtonText("Preview").onClick(async () => {
+          try {
+            const summary = await this.plugin.previewGoogleTasksSync();
+            new Notice(summary, 9000);
+          } catch (error) {
+            new Notice(`[Temporal Drift] Preview failed: ${String((error as any)?.message ?? error)}`, 5000);
+          }
+          renderStatus();
+        })
+      )
+      .addButton((btn) =>
         btn.setButtonText("Disconnect").onClick(async () => {
           await this.plugin.disconnectGoogleTasks();
           renderStatus();
