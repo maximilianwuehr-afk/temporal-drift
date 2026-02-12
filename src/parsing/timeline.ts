@@ -300,7 +300,7 @@ export function parseDailyNoteTimeline(content: string): ParsedDailyTimeline {
         j++;
         continue;
       }
-      if (!/^\s+/.test(next)) {
+      if (!/^(\s+|[-*+]\s)/.test(next)) {
         break;
       }
 
