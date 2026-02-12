@@ -22,6 +22,7 @@ import {
 } from "../parsing/timeline";
 import { formatTime } from "../utils/time";
 import { pathInFolder } from "../utils/folder-match";
+import { openWikiLinkFromCard } from "../utils/timeline-link-open";
 
 const MAX_BODY_LINES = 8;
 
@@ -38,6 +39,7 @@ type TimelineEntry = {
   participants: Participant[];
   bodyLines: string[];
   joinUrl: string | null;
+  primaryLinkTarget: string | null;
   raw: string;
   kind: "event" | "task" | "note";
   taskDone: boolean;
@@ -333,7 +335,7 @@ class TimelineCardWidget extends WidgetType {
         a.className = "participant";
         a.href = "#";
         a.setAttribute("role", "button");
-        a.setAttribute("aria-label", `Jump to ${p.display}`);
+        a.setAttribute("aria-label", `Open ${p.display}`);
 
         const av = document.createElement("span");
         av.className = "participant-avatar";
@@ -345,8 +347,15 @@ class TimelineCardWidget extends WidgetType {
         a.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          view.dispatch({ selection: { anchor: this.entry.lineFrom } });
-          view.focus();
+
+          const app = (window as unknown as { app?: unknown }).app;
+          const sourcePath = view.state.field(editorInfoField, false)?.file?.path ?? "";
+
+          void openWikiLinkFromCard(app as any, p.target, sourcePath).then((opened) => {
+            if (opened) return;
+            view.dispatch({ selection: { anchor: this.entry.lineFrom } });
+            view.focus();
+          });
         });
 
         pWrap.appendChild(a);
@@ -421,7 +430,13 @@ class TimelineCardWidget extends WidgetType {
     card.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      card.focus();
+
+      const app = (window as unknown as { app?: unknown }).app;
+      const sourcePath = view.state.field(editorInfoField, false)?.file?.path ?? "";
+
+      void openWikiLinkFromCard(app as any, this.entry.primaryLinkTarget ?? "", sourcePath).then((opened) => {
+        if (!opened) card.focus();
+      });
     });
 
     card.addEventListener("dblclick", (e) => {
@@ -548,6 +563,7 @@ function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
       participants,
       bodyLines,
       joinUrl,
+      primaryLinkTarget: primary?.target ?? null,
       raw,
       kind,
       taskDone: task.done,

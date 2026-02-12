@@ -7,6 +7,7 @@
 
 import { MarkdownPostProcessorContext, MarkdownView, TFile, normalizePath } from "obsidian";
 import { pathInFolder } from "../utils/folder-match";
+import { openWikiLinkFromCard } from "../utils/timeline-link-open";
 import type TemporalDriftPlugin from "../main";
 import {
   extractMeetingJoinUrl,
@@ -196,6 +197,10 @@ function renderCardDom(app: TemporalDriftPlugin["app"], file: TFile, entry: Pars
       a.addEventListener("click", async (e) => {
         e.preventDefault();
         e.stopPropagation();
+
+        const opened = await openWikiLinkFromCard(app, p.target, file.path);
+        if (opened) return;
+
         await openAndJumpToLine(app, file, entry.lineStart);
       });
 
@@ -228,6 +233,11 @@ function renderCardDom(app: TemporalDriftPlugin["app"], file: TFile, entry: Pars
 
   root.addEventListener("click", async (e) => {
     e.preventDefault();
+
+    const primary = extractPrimaryLink(entry.head);
+    const opened = await openWikiLinkFromCard(app, primary?.target ?? "", file.path);
+    if (opened) return;
+
     await openAndJumpToLine(app, file, entry.lineStart);
   });
 
