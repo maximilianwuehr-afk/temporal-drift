@@ -11,6 +11,7 @@ import { Decoration, DecorationSet, EditorView, WidgetType } from "@codemirror/v
 import { TFile, editorInfoField, editorLivePreviewField, normalizePath } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 import {
+  extractMeetingJoinUrl,
   extractParticipants,
   extractPrimaryLink,
   isTimelineLine,
@@ -36,6 +37,7 @@ type TimelineEntry = {
   locationText: string;
   participants: Participant[];
   bodyLines: string[];
+  joinUrl: string | null;
   raw: string;
   kind: "event" | "task" | "note";
   taskDone: boolean;
@@ -64,6 +66,18 @@ function focusAdjacentCard(current: HTMLElement, direction: 1 | -1): void {
   const next = cards[nextIdx];
   next.focus();
   next.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function openExternalUrl(url: string): void {
+  const app = (window as unknown as { app?: any }).app;
+  const openWithDefaultApp = app?.openWithDefaultApp as ((targetUrl: string) => void) | undefined;
+
+  if (openWithDefaultApp) {
+    openWithDefaultApp(url);
+    return;
+  }
+
+  window.open(url);
 }
 
 function upsertFrontmatterKey(content: string, key: string, value: string): string {
@@ -277,6 +291,22 @@ class TimelineCardWidget extends WidgetType {
     duration.textContent = "";
     right.appendChild(duration);
 
+    const joinUrl = this.entry.kind === "event" ? this.entry.joinUrl : null;
+    if (joinUrl) {
+      const joinBtn = document.createElement("button");
+      joinBtn.className = "event-join-btn";
+      joinBtn.setAttribute("type", "button");
+      joinBtn.setAttribute("aria-label", "Join meeting");
+      joinBtn.setAttribute("title", "Join meeting");
+      joinBtn.textContent = "Join";
+      joinBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openExternalUrl(joinUrl);
+      });
+      right.appendChild(joinBtn);
+    }
+
     const editBtn = document.createElement("button");
     editBtn.className = "event-edit-btn";
     editBtn.setAttribute("type", "button");
@@ -485,6 +515,8 @@ function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
 
     const kind: "event" | "task" | "note" = task.isTask ? "task" : primary ? "event" : "note";
 
+    const joinUrl = kind === "event" ? extractMeetingJoinUrl([head, ...bodyLines]) : null;
+
     const title = (() => {
       if (task.isTask) {
         return stripWikilinks(task.title || "(empty task)");
@@ -515,6 +547,7 @@ function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
       locationText,
       participants,
       bodyLines,
+      joinUrl,
       raw,
       kind,
       taskDone: task.done,

@@ -334,6 +334,37 @@
 }
 
 /* --------------------------------------------------------------------------
+   Join affordance
+   -------------------------------------------------------------------------- */
+
+.td-live-preview .event-join-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--interactive-accent);
+  background: var(--td-bg-secondary);
+  color: var(--interactive-accent);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.td-live-preview .event-join-btn:hover {
+  border-color: var(--interactive-accent-hover);
+  background: var(--td-accent-subtle);
+}
+
+.td-live-preview .event-join-btn:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
    Edit affordance
    -------------------------------------------------------------------------- */
 
