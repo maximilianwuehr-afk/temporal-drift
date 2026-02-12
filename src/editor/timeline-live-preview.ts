@@ -464,7 +464,7 @@ function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
         continue;
       }
 
-      if (!/^\s+/.test(text)) break;
+      if (!/^(\s+|[-*+]\s)/.test(text)) break;
 
       bodyLines.push(text.replace(/^\s+/, ""));
       rawLines.push(text);
