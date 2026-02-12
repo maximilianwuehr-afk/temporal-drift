@@ -13,25 +13,47 @@ import { editorInfoField } from "obsidian";
 import { TemporalDriftSettings } from "../types";
 import { formatTime } from "../utils/time";
 import { pathInFolder } from "../utils/folder-match";
+import { parseTimelineLine } from "../parsing/timeline";
 
 export function createAutoTimestampExtension(settings: TemporalDriftSettings): Extension {
+  const inDailyNote = (view: EditorView): boolean => {
+    // Safely access file — may not exist on "New tab" screen
+    let file: { path: string } | null | undefined;
+    try {
+      const editorInfo = view.state.field(editorInfoField, false);
+      file = editorInfo?.file;
+    } catch {
+      return false;
+    }
+
+    return !!file?.path && pathInFolder(file.path, settings.dailyNotesFolder, ["Daily notes"]);
+  };
+
   return keymap.of([
+    {
+      key: "Shift-Enter",
+      run: (view: EditorView): boolean => {
+        if (!inDailyNote(view)) return false;
+
+        const cursor = view.state.selection.main.head;
+        const line = view.state.doc.lineAt(cursor);
+
+        if (cursor !== line.to) return false;
+        if (!parseTimelineLine(line.text)) return false;
+
+        const insert = "\n      ";
+        view.dispatch({
+          changes: { from: line.to, insert },
+          selection: { anchor: line.to + insert.length },
+        });
+
+        return true;
+      },
+    },
     {
       key: "Enter",
       run: (view: EditorView): boolean => {
-        // Safely access file — may not exist on "New tab" screen
-        let file: { path: string } | null | undefined;
-        try {
-          const editorInfo = view.state.field(editorInfoField, false);
-          file = editorInfo?.file;
-        } catch {
-          return false;
-        }
-
-        // Only apply inside the daily notes folder
-        if (!file?.path || !pathInFolder(file.path, settings.dailyNotesFolder, ["Daily notes"])) {
-          return false;
-        }
+        if (!inDailyNote(view)) return false;
 
         const cursor = view.state.selection.main.head;
         const line = view.state.doc.lineAt(cursor);
@@ -42,7 +64,7 @@ export function createAutoTimestampExtension(settings: TemporalDriftSettings): E
           return false;
         }
 
-        // Must be a time-stamped line
+        // Must be a top-level time-stamped line
         // No regex lookbehind for iOS compatibility
         const timeMatch = line.text.match(/^(\d{2}):(\d{2})\b/);
         if (!timeMatch) {

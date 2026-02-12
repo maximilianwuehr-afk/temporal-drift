@@ -32,14 +32,14 @@ export interface ParsedTaskHead {
   priority: "now" | "next" | "later" | null;
 }
 
-// Supported formats:
+// Supported formats (top-level only, no leading indentation):
 // 1) 13:00 [[Meeting]] with [[Person]]
 // 2) `13:00` — [[Meeting]] with [[Person]]
 // 3) 06:00–21:00 — Description
 // 4) 09:00 — Description _(note)_
-const TIME_PLAIN_RE = /^\s*(?:[-*+]\s+)?(\d{2}):(\d{2})\s+(.*)$/;
+const TIME_PLAIN_RE = /^(?:[-*+]\s+)?(\d{2}):(\d{2})\s+(.*)$/;
 const TIME_DASH_RE =
-  /^\s*(?:[-*+]\s+)?`?(\d{2}:\d{2})(?:\s*[–-]\s*(\d{2}:\d{2}))?`?\s*[—–-]\s*(.*)$/;
+  /^(?:[-*+]\s+)?`?(\d{2}:\d{2})(?:\s*[–-]\s*(\d{2}:\d{2}))?`?\s*[—–-]\s*(.*)$/;
 
 export function parseTimelineLine(text: string): ParsedTimelineLine | null {
   const dash = text.match(TIME_DASH_RE);

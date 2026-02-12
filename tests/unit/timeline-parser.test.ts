@@ -92,6 +92,12 @@ test("parseTimelineLine supports canonical and legacy formats", () => {
   assert.equal(isTimelineLine("not a timeline line"), false);
 });
 
+test("parseTimelineLine ignores indented timestamp lines", () => {
+  assert.equal(parseTimelineLine("  13:00 [[Standup]]"), null);
+  assert.equal(parseTimelineLine("    `13:00` — [[Standup]]"), null);
+  assert.equal(parseTimelineLine("\t13:00 [[Standup]]"), null);
+});
+
 test("parseTaskHead handles open/done task heads", () => {
   const openTask = parseTaskHead("[ ] Ship parser #now");
   const doneTask = parseTaskHead("- [x] Review notes @later");
@@ -162,6 +168,22 @@ test("parseDailyNoteTimeline handles dash/backtick/range and indented children",
   assert.equal(parsed.entries[1].time, "06:00–21:00");
   assert.equal(parsed.entries[1].head, "Workday");
   assert.equal(parsed.entries[2].head, "Freeform note _(legacy)_");
+});
+
+test("parseDailyNoteTimeline treats indented timestamps as child text", () => {
+  const content = `# 2027-01-03
+
+09:00 [[Standup ~id123]] with [[Anna Meyer]]
+    09:15 this should stay nested
+    - 09:20 this too
+
+10:00 [[Planning ~id124]]`;
+
+  const parsed = parseDailyNoteTimeline(content);
+  assert.equal(parsed.entries.length, 2);
+  assert.equal(parsed.entries[0].time, "09:00");
+  assert.deepEqual(parsed.entries[0].body, ["09:15 this should stay nested", "- 09:20 this too", ""]);
+  assert.equal(parsed.entries[1].time, "10:00");
 });
 
 test("parseDailyNoteTimeline handles empty daily note", () => {
