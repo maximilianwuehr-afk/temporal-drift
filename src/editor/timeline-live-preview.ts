@@ -48,12 +48,37 @@ type TimelineEntry = {
   taskLinkPath: string | null;
 };
 
-function getInitials(name: string): string {
+function getFirstName(name: string): string {
   const cleaned = name.replace(/\[\[|\]\]/g, "").trim();
   const parts = cleaned.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return parts[0];
+}
+
+function parseTimeWindow(timeText: string): { start: number; end: number | null } | null {
+  const start = timeText.match(/^(\d{2}):(\d{2})/);
+  if (!start) return null;
+
+  const startMinutes = Number(start[1]) * 60 + Number(start[2]);
+  const end = timeText.match(/[–-](\d{2}):(\d{2})/);
+  if (!end) return { start: startMinutes, end: null };
+
+  return {
+    start: startMinutes,
+    end: Number(end[1]) * 60 + Number(end[2]),
+  };
+}
+
+function isEntryNow(timeText: string, now = new Date()): boolean {
+  const window = parseTimeWindow(timeText);
+  if (!window) return false;
+
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  if (window.end !== null) {
+    return currentMinutes >= window.start && currentMinutes <= window.end;
+  }
+
+  return currentMinutes >= window.start && currentMinutes < window.start + 60;
 }
 
 function focusAdjacentCard(current: HTMLElement, direction: 1 | -1): void {
@@ -214,7 +239,17 @@ class TimelineCardWidget extends WidgetType {
 
     const timeEl = document.createElement("div");
     timeEl.className = "hour-time";
-    timeEl.textContent = this.entry.time;
+
+    if (isEntryNow(this.entry.time)) {
+      hour.classList.add("now");
+      timeEl.classList.add("is-now");
+      const dot = document.createElement("span");
+      dot.className = "now-dot";
+      dot.textContent = "●";
+      timeEl.appendChild(dot);
+    }
+
+    timeEl.appendChild(document.createTextNode(this.entry.time));
 
     const slot = document.createElement("div");
     slot.className = "hour-slot";
@@ -234,117 +269,77 @@ class TimelineCardWidget extends WidgetType {
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `Timeline entry ${this.entry.time}`);
 
-    const top = document.createElement("div");
-    top.className = "event-top";
-
-    const left = document.createElement("div");
+    const headline = document.createElement("div");
+    headline.className = "event-headline";
 
     if (this.entry.kind === "task") {
-      const taskRow = document.createElement("div");
-      taskRow.className = "event-task-row";
-
-      const taskToggle = document.createElement("input");
-      taskToggle.className = "event-task-checkbox";
-      taskToggle.type = "checkbox";
-      taskToggle.checked = this.entry.taskDone;
-      taskToggle.setAttribute("aria-label", this.entry.taskDone ? "Mark task as open" : "Mark task as done");
-      taskToggle.addEventListener("click", (e) => {
-        e.stopPropagation();
-      });
-      taskToggle.addEventListener("change", (e) => {
+      const bubble = document.createElement("button");
+      bubble.type = "button";
+      bubble.className = `task-bubble${this.entry.taskDone ? " done" : ""}`;
+      bubble.setAttribute("aria-label", this.entry.taskDone ? "Mark task as open" : "Mark task as done");
+      if (this.entry.taskDone) bubble.textContent = "✓";
+      bubble.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
         this.toggleTask(view);
       });
+      headline.appendChild(bubble);
 
-      const title = document.createElement("div");
+      const title = document.createElement("span");
       title.className = "event-title";
+      if (this.entry.taskDone) title.classList.add("task-title-done");
       title.textContent = this.entry.title;
+      headline.appendChild(title);
 
-      taskRow.appendChild(taskToggle);
-      taskRow.appendChild(title);
-      left.appendChild(taskRow);
+      if (this.entry.taskPriority) {
+        const priority = document.createElement("span");
+        priority.className = `task-priority task-priority-${this.entry.taskPriority}`;
+        priority.textContent = `#${this.entry.taskPriority}`;
+        headline.appendChild(priority);
+      }
     } else {
-      const title = document.createElement("div");
+      const title = document.createElement("span");
       title.className = "event-title";
       title.textContent = this.entry.title;
-      left.appendChild(title);
+      headline.appendChild(title);
+
+      if (this.entry.locationText) {
+        const location = document.createElement("span");
+        location.className = "event-at";
+        location.textContent = ` @ ${this.entry.locationText}`;
+        headline.appendChild(location);
+      }
+
+      const joinUrl = this.entry.joinUrl;
+      if (joinUrl) {
+        const join = document.createElement("a");
+        join.className = "join-pill";
+        join.href = "#";
+        join.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>join`;
+        join.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openExternalUrl(joinUrl);
+        });
+        headline.appendChild(join);
+      }
     }
 
-    if (this.entry.locationText) {
-      const loc = document.createElement("div");
-      loc.className = "event-location";
-      loc.textContent = this.entry.locationText;
-      left.appendChild(loc);
-    }
-
-    const right = document.createElement("div");
-    right.className = "event-right";
-
-    if (this.entry.kind === "task" && this.entry.taskPriority) {
-      const chip = document.createElement("span");
-      chip.className = `event-priority-chip event-priority-${this.entry.taskPriority}`;
-      chip.textContent = this.entry.taskPriority;
-      right.appendChild(chip);
-    }
-
-    const duration = document.createElement("span");
-    duration.className = "event-duration";
-    duration.textContent = "";
-    right.appendChild(duration);
-
-    const joinUrl = this.entry.kind === "event" ? this.entry.joinUrl : null;
-    if (joinUrl) {
-      const joinBtn = document.createElement("button");
-      joinBtn.className = "event-join-btn";
-      joinBtn.setAttribute("type", "button");
-      joinBtn.setAttribute("aria-label", "Join meeting");
-      joinBtn.setAttribute("title", "Join meeting");
-      joinBtn.textContent = "Join";
-      joinBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openExternalUrl(joinUrl);
-      });
-      right.appendChild(joinBtn);
-    }
-
-    const editBtn = document.createElement("button");
-    editBtn.className = "event-edit-btn";
-    editBtn.setAttribute("type", "button");
-    editBtn.setAttribute("aria-label", "Edit entry");
-    editBtn.setAttribute("title", "Edit");
-    editBtn.textContent = "✏️";
-    editBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.enterEdit(view);
-    });
-    right.appendChild(editBtn);
-
-    top.appendChild(left);
-    top.appendChild(right);
-    card.appendChild(top);
+    card.appendChild(headline);
 
     if (this.entry.participants.length > 0) {
-      const pWrap = document.createElement("div");
-      pWrap.className = "event-participants";
+      const peopleRow = document.createElement("div");
+      peopleRow.className = "people-row";
 
       for (const p of this.entry.participants) {
-        const a = document.createElement("a");
-        a.className = "participant";
-        a.href = "#";
-        a.setAttribute("role", "button");
-        a.setAttribute("aria-label", `Open ${p.display}`);
+        const person = document.createElement("a");
+        person.className = "person-badge";
+        person.href = "#";
+        person.setAttribute("role", "button");
+        person.setAttribute("aria-label", `Open ${p.display}`);
+        person.textContent = getFirstName(p.display);
 
-        const av = document.createElement("span");
-        av.className = "participant-avatar";
-        av.textContent = getInitials(p.display);
-
-        a.appendChild(av);
-        a.appendChild(document.createTextNode(p.display));
-
-        a.addEventListener("click", (e) => {
+        person.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
 
@@ -358,73 +353,34 @@ class TimelineCardWidget extends WidgetType {
           });
         });
 
-        pWrap.appendChild(a);
+        peopleRow.appendChild(person);
       }
 
-      card.appendChild(pWrap);
+      card.appendChild(peopleRow);
     }
 
-    if (this.entry.bodyLines.length > 0) {
-      const body = document.createElement("div");
-      body.className = "event-body";
+    const nonEmptyBody = this.entry.bodyLines.filter((line) => line.trim().length > 0);
+    if (nonEmptyBody.length > 0) {
+      const bodyLine = document.createElement("div");
+      bodyLine.className = "briefing-line";
 
-      const nonEmptyBody = this.entry.bodyLines.filter((l) => l.trim().length > 0);
-      const overflow = nonEmptyBody.length - MAX_BODY_LINES;
-      const visible = nonEmptyBody.slice(0, MAX_BODY_LINES);
+      const label = document.createElement("span");
+      label.className = "briefing-label";
+      label.textContent = this.entry.kind === "task" ? "DETAILS" : "BRIEFING";
+      bodyLine.appendChild(label);
 
-      if (this.entry.kind === "task") {
-        const taskList = document.createElement("div");
-        taskList.className = "event-subtasks";
+      const text = document.createElement("span");
+      text.className = "briefing-text";
+      const visible = nonEmptyBody.slice(0, MAX_BODY_LINES).map((line) => {
+        const cleaned = line.trim().replace(/^[-*+]\s+/, "• ");
+        return stripWikilinks(cleaned);
+      });
+      const overflow = nonEmptyBody.length - visible.length;
+      if (overflow > 0) visible.push(`… +${overflow} more`);
+      text.textContent = visible.join(" ");
+      bodyLine.appendChild(text);
 
-        for (const line of visible) {
-          const item = document.createElement("div");
-          item.className = "event-subtask";
-
-          const parsed = parseTaskHead(line);
-          if (parsed.isTask) {
-            const mark = document.createElement("input");
-            mark.className = "event-subtask-checkbox";
-            mark.type = "checkbox";
-            mark.checked = parsed.done;
-            mark.disabled = true;
-
-            const text = document.createElement("span");
-            text.className = "event-subtask-text";
-            text.textContent = stripWikilinks(parsed.title);
-            if (parsed.done) text.classList.add("event-subtask-text-done");
-
-            item.appendChild(mark);
-            item.appendChild(text);
-          } else {
-            const text = document.createElement("span");
-            text.className = "event-subtask-text";
-            text.textContent = stripWikilinks(line);
-            item.appendChild(text);
-          }
-
-          taskList.appendChild(item);
-        }
-
-        if (overflow > 0) {
-          const more = document.createElement("div");
-          more.className = "event-subtask-more";
-          more.textContent = `… +${overflow} more`;
-          taskList.appendChild(more);
-        }
-
-        body.appendChild(taskList);
-      } else {
-        const pre = document.createElement("div");
-        pre.className = "event-body-text";
-        const textLines = visible.map(stripWikilinks);
-        if (overflow > 0) {
-          textLines.push(`… +${overflow} more`);
-        }
-        pre.textContent = textLines.join("\n");
-        body.appendChild(pre);
-      }
-
-      card.appendChild(body);
+      card.appendChild(bodyLine);
     }
 
     card.addEventListener("click", (e) => {
