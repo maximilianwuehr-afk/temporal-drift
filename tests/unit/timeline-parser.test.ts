@@ -1,14 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  extractEventIdFromHead,
+  extractMeetingJoinUrl,
   extractParticipants,
   extractPrimaryLink,
+  extractUrlsFromText,
+  isTimelineLine,
   minutesSinceMidnight,
   parseDailyNoteTimeline,
-  parseTimelineLine,
-  isTimelineLine,
   parseTaskHead,
+  parseTimelineLine,
   parseWikilinkDisplay,
+  replaceTimeToken,
   stripEventIdSuffix,
   stripWikilinks,
 } from "../../src/parsing/timeline";
@@ -39,7 +43,39 @@ test("extractPrimaryLink and participants parse event headline", () => {
 
 test("stripEventIdSuffix removes trailing event ids", () => {
   assert.equal(stripEventIdSuffix("Standup ~abc123"), "Standup");
+  assert.equal(stripEventIdSuffix("Standup ~abc_123@google.com"), "Standup");
   assert.equal(stripEventIdSuffix("Normal title"), "Normal title");
+});
+
+test("extractEventIdFromHead extracts id from primary wikilink", () => {
+  const head = "[[Weekly Sync ~abc_123@google.com]] with [[Alice]]";
+  assert.equal(extractEventIdFromHead(head), "abc_123@google.com");
+});
+
+test("replaceTimeToken patches only first HH:mm occurrence", () => {
+  const line = "09:00 [[Weekly Sync ~abc123]] with [[Alice]]";
+  assert.equal(replaceTimeToken(line, "09:30"), "09:30 [[Weekly Sync ~abc123]] with [[Alice]]");
+});
+
+test("extractUrlsFromText parses plain and markdown links", () => {
+  const text = "Join: https://meet.google.com/abc-defg-hij and [backup](https://zoom.us/j/123456789).";
+  const urls = extractUrlsFromText(text);
+
+  assert.deepEqual(urls, ["https://meet.google.com/abc-defg-hij", "https://zoom.us/j/123456789"]);
+});
+
+test("extractMeetingJoinUrl prefers known meeting hosts", () => {
+  const url = extractMeetingJoinUrl([
+    "Agenda: https://docs.google.com/document/d/abc",
+    "Join here https://finn.zoom.us/j/123456789?pwd=abc",
+  ]);
+
+  assert.equal(url, "https://finn.zoom.us/j/123456789?pwd=abc");
+});
+
+test("extractMeetingJoinUrl falls back to single unknown url", () => {
+  const url = extractMeetingJoinUrl("Dial-in: https://calls.finn.internal/room/ops-sync");
+  assert.equal(url, "https://calls.finn.internal/room/ops-sync");
 });
 
 test("minutesSinceMidnight parses valid hh:mm", () => {

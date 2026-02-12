@@ -7,7 +7,13 @@ import type TemporalDriftPlugin from "./main";
 import { formatTime, formatDate } from "./utils/time";
 import { pathInFolder } from "./utils/folder-match";
 import { parseTaskSnapshotFromContent, taskLinkMatches, TaskSnapshot } from "./services/task-allocation-utils";
-import { parseTimelineLine, parseTaskHead } from "./parsing/timeline";
+import {
+  extractMeetingJoinUrl,
+  extractPrimaryLink,
+  minutesSinceMidnight,
+  parseTimelineLine,
+  parseTaskHead,
+} from "./parsing/timeline";
 
 type TaskAllocation = { dayPath: string; day: string; time: string };
 
@@ -91,6 +97,137 @@ async function computeAllocations(plugin: TemporalDriftPlugin, taskFile: TFile):
 
 function canonicalStatus(snapshot: TaskSnapshot): "open" | "done" {
   return snapshot.done ? "done" : "open";
+}
+
+type JoinMeetingCandidate = {
+  time: string;
+  minutes: number;
+  title: string;
+  joinUrl: string;
+};
+
+function openExternalUrl(plugin: TemporalDriftPlugin, url: string): void {
+  const openWithDefaultApp = (plugin.app as any).openWithDefaultApp as ((targetUrl: string) => void) | undefined;
+  if (openWithDefaultApp) {
+    openWithDefaultApp(url);
+    return;
+  }
+
+  window.open(url);
+}
+
+async function resolveJoinUrlForEntry(
+  plugin: TemporalDriftPlugin,
+  sourcePath: string,
+  head: string,
+  bodyLines: string[]
+): Promise<string | null> {
+  const inline = extractMeetingJoinUrl([head, ...bodyLines]);
+  if (inline) return inline;
+
+  const primary = extractPrimaryLink(head);
+  if (!primary) return null;
+
+  const linked = plugin.app.metadataCache.getFirstLinkpathDest(primary.target, sourcePath);
+  if (!(linked instanceof TFile)) return null;
+
+  try {
+    const linkedContent = await plugin.app.vault.read(linked);
+    return extractMeetingJoinUrl(linkedContent);
+  } catch {
+    return null;
+  }
+}
+
+async function collectJoinCandidatesForDate(
+  plugin: TemporalDriftPlugin,
+  date: Date
+): Promise<JoinMeetingCandidate[]> {
+  const dateStr = formatDate(date);
+  const dayPath = normalizePath(`${plugin.settings.dailyNotesFolder}/${dateStr}.md`);
+  const dayFile = plugin.app.vault.getAbstractFileByPath(dayPath);
+  if (!(dayFile instanceof TFile)) return [];
+
+  let content: string;
+  try {
+    content = await plugin.app.vault.read(dayFile);
+  } catch {
+    return [];
+  }
+
+  const lines = content.split("\n");
+  const candidates: JoinMeetingCandidate[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const parsed = parseTimelineLine(lines[i]);
+    if (!parsed) continue;
+
+    if (parseTaskHead(parsed.head).isTask) continue;
+
+    const bodyLines: string[] = [];
+    let j = i + 1;
+    while (j < lines.length) {
+      const next = lines[j];
+      if (parseTimelineLine(next)) break;
+      if (next.match(/^##/)) break;
+
+      if (next.trim() === "") {
+        bodyLines.push("");
+        j++;
+        continue;
+      }
+
+      if (!/^\s+/.test(next)) break;
+
+      bodyLines.push(next.replace(/^\s+/, ""));
+      j++;
+    }
+
+    const joinUrl = await resolveJoinUrlForEntry(plugin, dayPath, parsed.head, bodyLines);
+    if (!joinUrl) {
+      i = j - 1;
+      continue;
+    }
+
+    const minutes = minutesSinceMidnight(parsed.timeText);
+    if (!Number.isFinite(minutes)) {
+      i = j - 1;
+      continue;
+    }
+
+    const title = (() => {
+      const primary = extractPrimaryLink(parsed.head);
+      if (primary) return primary.display.replace(/\s*~[^\s\]|]+$/, "").trim();
+      return parsed.head.slice(0, 80).trim() || "Meeting";
+    })();
+
+    candidates.push({
+      time: parsed.timeText,
+      minutes,
+      title,
+      joinUrl,
+    });
+
+    i = j - 1;
+  }
+
+  return candidates.sort((a, b) => a.minutes - b.minutes);
+}
+
+async function findNextMeetingCandidate(plugin: TemporalDriftPlugin): Promise<JoinMeetingCandidate | null> {
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const todayCandidates = await collectJoinCandidatesForDate(plugin, now);
+  const upcomingToday = todayCandidates.find((c) => c.minutes >= nowMinutes - 15);
+  if (upcomingToday) return upcomingToday;
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowCandidates = await collectJoinCandidatesForDate(plugin, tomorrow);
+  if (tomorrowCandidates.length > 0) return tomorrowCandidates[0];
+
+  return null;
 }
 
 export function registerCommands(plugin: TemporalDriftPlugin): void {
@@ -241,6 +378,85 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
         new Notice(summary || "No preview available.", 9000);
       } catch (error) {
         new Notice(`[Temporal Drift] Preview failed: ${String((error as any)?.message ?? error)}`, 5000);
+      }
+    },
+  });
+
+  plugin.addCommand({
+    id: "calendar-sync-now",
+    name: "Calendar: Sync active day now",
+    callback: async () => {
+      const active = plugin.app.workspace.getActiveFile();
+      const date =
+        active && pathInFolder(active.path, plugin.settings.dailyNotesFolder, ["Daily notes"])
+          ? active.basename
+          : formatDate(new Date());
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        new Notice("[Temporal Drift] Active file is not a daily note.", 4000);
+        return;
+      }
+
+      await (plugin as any).syncCalendarDateNow?.(date);
+      new Notice(`[Temporal Drift] Calendar sync finished for ${date}.`, 3000);
+    },
+  });
+
+  plugin.addCommand({
+    id: "calendar-preview-sync",
+    name: "Calendar: Preview active day sync",
+    callback: async () => {
+      const active = plugin.app.workspace.getActiveFile();
+      const date =
+        active && pathInFolder(active.path, plugin.settings.dailyNotesFolder, ["Daily notes"])
+          ? active.basename
+          : formatDate(new Date());
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        new Notice("[Temporal Drift] Active file is not a daily note.", 4000);
+        return;
+      }
+
+      const summary = (await (plugin as any).previewCalendarDateSync?.(date)) as string | undefined;
+      new Notice(summary || "No calendar preview available.", 9000);
+    },
+  });
+
+  plugin.addCommand({
+    id: "calendar-restore-suppressed",
+    name: "Calendar: Restore suppressed events for active day",
+    callback: async () => {
+      const active = plugin.app.workspace.getActiveFile();
+      const date =
+        active && pathInFolder(active.path, plugin.settings.dailyNotesFolder, ["Daily notes"])
+          ? active.basename
+          : formatDate(new Date());
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        new Notice("[Temporal Drift] Active file is not a daily note.", 4000);
+        return;
+      }
+
+      const restored = (await (plugin as any).restoreCalendarSuppressedForDate?.(date)) as number | undefined;
+      new Notice(`[Temporal Drift] Restored ${restored ?? 0} suppressed event(s) for ${date}.`, 5000);
+    },
+  });
+
+  plugin.addCommand({
+    id: "join-next-meeting",
+    name: "Join next meeting",
+    callback: async () => {
+      try {
+        const next = await findNextMeetingCandidate(plugin);
+        if (!next) {
+          new Notice("[Temporal Drift] No upcoming meeting with a join link found.", 4000);
+          return;
+        }
+
+        openExternalUrl(plugin, next.joinUrl);
+        new Notice(`[Temporal Drift] Joining ${next.title} (${next.time}).`, 3000);
+      } catch (error) {
+        new Notice(`[Temporal Drift] Join failed: ${String((error as any)?.message ?? error)}`, 5000);
       }
     },
   });

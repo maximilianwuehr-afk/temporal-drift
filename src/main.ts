@@ -19,6 +19,9 @@ import { TemporalDriftTaskPoolView, VIEW_TYPE_TEMPORAL_DRIFT_TASK_POOL } from ".
 import { TaskAllocationSync } from "./services/task-allocation-sync";
 import { TaskIndexService } from "./services/task-index";
 import { GoogleTasksSyncService } from "./services/google-tasks-sync";
+import { CalendarService } from "./services/calendar";
+import { CalendarEventSyncService } from "./services/calendar-event-sync";
+import { pathInFolder } from "./utils/folder-match";
 
 export default class TemporalDriftPlugin extends Plugin {
   settings: TemporalDriftSettings = DEFAULT_SETTINGS;
@@ -33,7 +36,10 @@ export default class TemporalDriftPlugin extends Plugin {
   private taskAllocationSync: TaskAllocationSync | null = null;
   private taskIndex: TaskIndexService | null = null;
   private googleTasksSync: GoogleTasksSyncService | null = null;
+  private calendarService: CalendarService | null = null;
+  private calendarEventSync: CalendarEventSyncService | null = null;
   private googleTasksIntervalId: number | null = null;
+  private calendarSyncIntervalId: number | null = null;
   private googleTasksSyncStatus: GoogleTasksSyncStatus = {
     state: "idle",
     inProgress: false,
@@ -53,6 +59,9 @@ export default class TemporalDriftPlugin extends Plugin {
     this.timelineLivePreview = new TimelineLivePreviewExtension(this.settings);
     this.taskDrop = new TaskDropExtension(this.settings);
     this.taskAllocationSync = new TaskAllocationSync(this.app, this.settings);
+
+    this.calendarService = new CalendarService(this.app, this.settings);
+    this.calendarEventSync = new CalendarEventSyncService(this.app, this.settings, this.calendarService);
 
     this.taskIndex = new TaskIndexService(this.app, this.settings);
     await this.taskIndex.buildIndex();
@@ -113,6 +122,18 @@ export default class TemporalDriftPlugin extends Plugin {
       })
     );
 
+    this.registerEvent(
+      this.app.workspace.on("file-open", async (file) => {
+        if (!(file instanceof TFile)) return;
+        if (!pathInFolder(file.path, this.settings.dailyNotesFolder, ["Daily notes"])) return;
+
+        const date = file.basename;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+
+        await this.syncCalendarDateNow(date);
+      })
+    );
+
     this.addSettingTab(new TemporalDriftSettingTab(this.app, this));
 
     registerCommands(this);
@@ -139,6 +160,8 @@ export default class TemporalDriftPlugin extends Plugin {
     });
 
     this.setupGoogleTasksAutoSync();
+    this.setupCalendarAutoSync();
+    void this.syncCalendarDateNow(this.getPreferredCalendarSyncDate());
   }
 
   private async reconcileFolderDefaults(): Promise<void> {
@@ -164,7 +187,7 @@ export default class TemporalDriftPlugin extends Plugin {
     reconcile("peopleFolder", "People");
 
     if (changed) {
-      await this.saveData(this.settings);
+      await this.saveSettingsDataOnly();
     }
   }
 
@@ -212,12 +235,72 @@ export default class TemporalDriftPlugin extends Plugin {
     this.registerInterval(this.googleTasksIntervalId);
   }
 
+  private setupCalendarAutoSync(): void {
+    if (this.calendarSyncIntervalId) {
+      window.clearInterval(this.calendarSyncIntervalId);
+      this.calendarSyncIntervalId = null;
+    }
+
+    if (!this.calendarEventSync || !this.calendarService?.isAvailable()) return;
+
+    const ms = 5 * 60_000;
+    this.calendarSyncIntervalId = window.setInterval(() => {
+      void this.syncCalendarDateNow(this.getPreferredCalendarSyncDate());
+    }, ms);
+
+    this.registerInterval(this.calendarSyncIntervalId);
+  }
+
+  private getPreferredCalendarSyncDate(): string {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (activeFile && pathInFolder(activeFile.path, this.settings.dailyNotesFolder, ["Daily notes"])) {
+      const base = activeFile.basename;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(base)) return base;
+    }
+
+    return formatDate(new Date());
+  }
+
+  async syncCalendarDateNow(date: string): Promise<void> {
+    if (!this.calendarEventSync) return;
+
+    try {
+      await this.calendarEventSync.syncDate(date);
+    } catch (error) {
+      console.warn("[Temporal Drift] Calendar sync failed", error);
+    }
+  }
+
+  async previewCalendarDateSync(date: string): Promise<string> {
+    if (!this.calendarEventSync) return "Calendar sync service unavailable.";
+
+    const preview = await this.calendarEventSync.previewDate(date);
+    return this.calendarEventSync.formatPreviewSummary(preview);
+  }
+
+  async restoreCalendarSuppressedForDate(date: string): Promise<number> {
+    if (!this.calendarEventSync) return 0;
+    return this.calendarEventSync.restoreSuppressedForDate(date);
+  }
+
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data ?? {});
+  }
+
+  private async saveSettingsDataOnly(): Promise<void> {
+    const existing = await this.loadData();
+    const safeExisting =
+      existing && typeof existing === "object" ? (existing as Record<string, unknown>) : {};
+
+    await this.saveData({
+      ...safeExisting,
+      ...this.settings,
+    });
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    await this.saveSettingsDataOnly();
 
     this.autoTimestamp?.updateSettings(this.settings);
     this.timeline?.updateSettings(this.settings);
@@ -226,8 +309,11 @@ export default class TemporalDriftPlugin extends Plugin {
     this.taskAllocationSync?.updateSettings(this.settings);
     this.taskIndex?.updateSettings(this.settings);
     this.googleTasksSync?.updateSettings(this.settings);
+    this.calendarService?.updateSettings(this.settings);
+    this.calendarEventSync?.updateSettings(this.settings);
 
     this.setupGoogleTasksAutoSync();
+    this.setupCalendarAutoSync();
   }
 
   async connectGoogleTasks(): Promise<void> {

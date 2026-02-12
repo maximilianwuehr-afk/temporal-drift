@@ -84,7 +84,107 @@ export function stripWikilinks(text: string): string {
 }
 
 export function stripEventIdSuffix(title: string): string {
-  return title.replace(/\s*~[a-zA-Z0-9]+$/, "").trim();
+  return title.replace(/\s*~[^\s\]|]+$/, "").trim();
+}
+
+export function extractEventIdFromHead(head: string): string | null {
+  const primary = extractPrimaryLink(head);
+  if (!primary) return null;
+
+  const fromTarget = primary.target.match(/~([^\s\]|]+)$/);
+  if (fromTarget?.[1]) return fromTarget[1];
+
+  const fromDisplay = primary.display.match(/~([^\s\]|]+)$/);
+  if (fromDisplay?.[1]) return fromDisplay[1];
+
+  return null;
+}
+
+export function replaceTimeToken(line: string, nextTime: string): string {
+  const idx = line.search(/\d{2}:\d{2}/);
+  if (idx < 0) return line;
+  return `${line.slice(0, idx)}${nextTime}${line.slice(idx + 5)}`;
+}
+
+const URL_RE = /https?:\/\/[^\s<>"]+/gi;
+
+const KNOWN_MEETING_HOSTS = [
+  "meet.google.com",
+  "zoom.us",
+  "teams.microsoft.com",
+  "webex.com",
+  "whereby.com",
+  "around.co",
+  "chime.aws",
+];
+
+function trimUrlCandidate(raw: string): string {
+  let url = raw.trim();
+
+  // Strip wrapping markdown punctuation and obvious trailing prose punctuation.
+  while (/^[<(\[]/.test(url)) url = url.slice(1);
+  while (/[\]>.,;!?]$/.test(url)) url = url.slice(0, -1);
+
+  // Handle unmatched trailing ")" from markdown links.
+  while (url.endsWith(")")) {
+    const opens = (url.match(/\(/g) || []).length;
+    const closes = (url.match(/\)/g) || []).length;
+    if (closes <= opens) break;
+    url = url.slice(0, -1);
+  }
+
+  return url;
+}
+
+function meetingUrlScore(url: string): number {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 0;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (KNOWN_MEETING_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) {
+    return 100;
+  }
+
+  const body = `${host}${parsed.pathname}${parsed.search}`.toLowerCase();
+  if (/(join|meeting|meet|conference|call)/.test(body)) {
+    return 60;
+  }
+
+  return 10;
+}
+
+export function extractUrlsFromText(text: string): string[] {
+  const matches = Array.from(text.matchAll(URL_RE));
+  const out: string[] = [];
+
+  for (const m of matches) {
+    const candidate = trimUrlCandidate(m[0] ?? "");
+    if (!candidate) continue;
+    if (!out.includes(candidate)) out.push(candidate);
+  }
+
+  return out;
+}
+
+export function extractMeetingJoinUrl(input: string | string[]): string | null {
+  const lines = Array.isArray(input) ? input : [input];
+  const urls = lines.flatMap((line) => extractUrlsFromText(line));
+  if (urls.length === 0) return null;
+
+  const scored = urls
+    .map((url, idx) => ({ url, score: meetingUrlScore(url), idx }))
+    .sort((a, b) => b.score - a.score || a.idx - b.idx);
+
+  if (scored[0].score >= 20) return scored[0].url;
+
+  // Fallback: if there's only one link, assume that's the intended join target.
+  if (urls.length === 1) return urls[0];
+
+  return null;
 }
 
 export function extractParticipants(head: string): Array<{ target: string; display: string }> {

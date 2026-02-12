@@ -9,6 +9,7 @@ import { MarkdownPostProcessorContext, MarkdownView, TFile, normalizePath } from
 import { pathInFolder } from "../utils/folder-match";
 import type TemporalDriftPlugin from "../main";
 import {
+  extractMeetingJoinUrl,
   extractParticipants,
   extractPrimaryLink,
   isTimelineLine,
@@ -28,6 +29,7 @@ type ParsedEntry = {
   locationText: string;
   participants: Participant[];
   bodyLines: string[];
+  joinUrl: string | null;
 };
 
 function getInitials(name: string): string {
@@ -86,6 +88,8 @@ function parseEntriesFromMarkdown(md: string): ParsedEntry[] {
       return stripWikilinks(t).trim();
     })();
 
+    const joinUrl = extractMeetingJoinUrl([head, ...bodyLines]);
+
     entries.push({
       lineStart: i,
       lineEnd: j - 1,
@@ -95,12 +99,23 @@ function parseEntriesFromMarkdown(md: string): ParsedEntry[] {
       locationText,
       participants,
       bodyLines,
+      joinUrl,
     });
 
     i = j - 1;
   }
 
   return entries;
+}
+
+function openExternalUrl(app: TemporalDriftPlugin["app"], url: string): void {
+  const openWithDefaultApp = (app as any).openWithDefaultApp as ((targetUrl: string) => void) | undefined;
+  if (openWithDefaultApp) {
+    openWithDefaultApp(url);
+    return;
+  }
+
+  window.open(url);
 }
 
 function renderCardDom(app: TemporalDriftPlugin["app"], file: TFile, entry: ParsedEntry): HTMLElement {
@@ -142,6 +157,22 @@ function renderCardDom(app: TemporalDriftPlugin["app"], file: TFile, entry: Pars
   duration.className = "event-duration";
   duration.textContent = "";
   right.appendChild(duration);
+
+  const joinUrl = entry.joinUrl;
+  if (joinUrl) {
+    const joinBtn = document.createElement("button");
+    joinBtn.className = "event-join-btn";
+    joinBtn.type = "button";
+    joinBtn.setAttribute("aria-label", "Join meeting");
+    joinBtn.setAttribute("title", "Join meeting");
+    joinBtn.textContent = "Join";
+    joinBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openExternalUrl(app, joinUrl);
+    });
+    right.appendChild(joinBtn);
+  }
 
   top.appendChild(left);
   top.appendChild(right);

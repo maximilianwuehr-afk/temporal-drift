@@ -6,6 +6,7 @@ import { App, TFile, normalizePath } from "obsidian";
 import { TimeEntry, ParsedDay, TemporalDriftSettings, Participant } from "../../types";
 import { formatTime, formatDate } from "../../utils/time";
 import { CalendarService, CalendarEvent } from "../../services/calendar";
+import { extractEventIdFromHead, extractParticipants, parseTimelineLine } from "../../parsing/timeline";
 
 export interface TimelineRendererOptions {
   onEntryClick?: (entry: TimeEntry, index: number) => void;
@@ -123,16 +124,27 @@ export class TimelineRenderer {
           continue;
         }
 
-        // Detect event pattern: [[Event ~id]] with [[Person]]
-        const eventMatch = content.match(/^\[\[([^~\]]+)\s*~([^\]]+)\]\]/);
-        if (eventMatch) {
-          parsed.entries.push({
-            type: "event",
-            time,
-            title: eventMatch[1].trim(),
-            eventId: eventMatch[2].trim(),
-          });
-          continue;
+        // Detect event pattern via embedded ~eventId
+        const parsedTimeLine = parseTimelineLine(line);
+        if (parsedTimeLine) {
+          const eventId = extractEventIdFromHead(parsedTimeLine.head);
+          if (eventId) {
+            const title = parsedTimeLine.head.replace(/\s+with\s+.*$/, "").replace(/^\[\[|\]\]$/g, "");
+            const titleLink = title.match(/^([^~]+)\s*~[^\s\]|]+$/)?.[1]?.trim() ?? title.trim();
+            const participants = extractParticipants(parsedTimeLine.head).map((p) => ({
+              name: p.display,
+              email: "",
+            }));
+
+            parsed.entries.push({
+              type: "event",
+              time,
+              title: titleLink,
+              eventId,
+              participants,
+            });
+            continue;
+          }
         }
 
         // Regular note entry
@@ -163,7 +175,7 @@ export class TimelineRenderer {
 
     const parsed = await this.parseDay(date);
 
-    // Merge calendar events
+    // Merge calendar events for display completeness.
     const calendarEvents = await this.fetchCalendarEvents(date);
     this.mergeCalendarEvents(parsed, calendarEvents);
 
@@ -419,20 +431,27 @@ email: ${participant.email}
     for (const event of events) {
       const time = formatTime(event.start);
 
-      // Check if event already exists in entries (by matching time and title)
-      const exists = parsed.entries.some(
-        (e) => e.type === "event" && e.time === time && e.title === event.title
+      const existing = parsed.entries.find(
+        (e): e is Extract<TimeEntry, { type: "event" }> =>
+          e.type === "event" && e.eventId === event.id
       );
 
-      if (!exists) {
-        parsed.entries.push({
-          type: "event",
-          time,
-          title: event.title,
-          eventId: event.id,
-          participants: event.participants,
-        });
+      if (existing) {
+        // Calendar owns timing; markdown owns participant content unless missing locally.
+        existing.time = time;
+        if ((!existing.participants || existing.participants.length === 0) && event.participants.length > 0) {
+          existing.participants = event.participants;
+        }
+        continue;
       }
+
+      parsed.entries.push({
+        type: "event",
+        time,
+        title: event.title,
+        eventId: event.id,
+        participants: event.participants,
+      });
     }
 
     // Sort entries by time
