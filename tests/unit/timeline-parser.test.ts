@@ -52,6 +52,11 @@ test("extractEventIdFromHead extracts id from primary wikilink", () => {
   assert.equal(extractEventIdFromHead(head), "abc_123@google.com");
 });
 
+test("extractEventIdFromHead extracts id from path-based wikilink target", () => {
+  const head = "[[Meetings/2026-02/Weekly Sync ~abc_123@google.com|Weekly Sync ~abc_123@google.com]] with [[Alice]]";
+  assert.equal(extractEventIdFromHead(head), "abc_123@google.com");
+});
+
 test("replaceTimeToken patches only first HH:mm occurrence", () => {
   const line = "09:00 [[Weekly Sync ~abc123]] with [[Alice]]";
   assert.equal(replaceTimeToken(line, "09:30"), "09:30 [[Weekly Sync ~abc123]] with [[Alice]]");

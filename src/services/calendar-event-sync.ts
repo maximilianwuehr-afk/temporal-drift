@@ -337,7 +337,10 @@ export class CalendarEventSyncService implements SettingsAware {
   }
 
   private buildEventLine(event: CalendarEvent): string {
-    const title = event.title.replace(/[\[\]]/g, "").trim() || "Untitled";
+    const title = this.sanitizeMeetingTitle(event.title) || "Untitled";
+    const targetPath = this.resolveMeetingLinkTarget(event, title);
+    const display = `${title} ~${event.id}`;
+
     const participants = event.participants
       .map((p) => p.name.replace(/[\[\]]/g, "").trim())
       .filter((name) => name.length > 0)
@@ -345,7 +348,21 @@ export class CalendarEventSyncService implements SettingsAware {
       .join(", ");
 
     const withPart = participants ? ` with ${participants}` : "";
-    return `${formatTime(event.start)} [[${title} ~${event.id}]]${withPart}`;
+    return `${formatTime(event.start)} [[${targetPath}|${display}]]${withPart}`;
+  }
+
+  private resolveMeetingLinkTarget(event: CalendarEvent, title: string): string {
+    const year = event.start.getFullYear();
+    const month = String(event.start.getMonth() + 1).padStart(2, "0");
+    return normalizePath(`${this.settings.meetingsFolder}/${year}-${month}/${title} ~${event.id}`);
+  }
+
+  private sanitizeMeetingTitle(rawTitle: string): string {
+    return rawTitle
+      .replace(/[\\/:*?"<>|]/g, " ")
+      .replace(/[\[\]]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private toSnapshot(event: CalendarEvent, date: string): CalendarRemoteSnapshot {
