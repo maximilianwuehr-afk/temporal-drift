@@ -96,7 +96,7 @@ export class CalendarEventSyncService implements SettingsAware {
     }
 
     for (const event of events) {
-      const key = this.calendarSyncState.makeKey("primary", event.id);
+      const key = this.calendarSyncState.makeKey(this.calendarService.getSyncSourceId(), event.id);
       const existing = local.firstLineByEventId.get(event.id);
       const nextTime = formatTime(event.start);
 
@@ -172,7 +172,7 @@ export class CalendarEventSyncService implements SettingsAware {
     let stateChanged = false;
 
     for (const event of events) {
-      const key = this.calendarSyncState.makeKey("primary", event.id);
+      const key = this.calendarSyncState.makeKey(this.calendarService.getSyncSourceId(), event.id);
       const existing = local.firstLineByEventId.get(event.id);
 
       // Manual restore: if user re-added the line, clear suppression.

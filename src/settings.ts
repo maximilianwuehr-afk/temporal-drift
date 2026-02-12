@@ -99,6 +99,117 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
           })
       );
 
+    // Calendar section
+    new Setting(containerEl).setName("Calendar Sync").setHeading();
+
+    new Setting(containerEl)
+      .setName("Calendar provider")
+      .setDesc("auto = prefer native Google API, fall back to external Google Calendar plugin")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("auto", "Auto (recommended)")
+          .addOption("plugin", "External plugin")
+          .addOption("native", "Native Google API")
+          .setValue(this.plugin.settings.calendarProvider)
+          .onChange(async (value) => {
+            this.plugin.settings.calendarProvider = value as "auto" | "plugin" | "native";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Google Calendar OAuth Client ID")
+      .setDesc("Desktop app client id from Google Cloud Console.")
+      .addText((text) =>
+        text
+          .setPlaceholder("xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com")
+          .setValue(this.plugin.settings.googleCalendarClientId)
+          .onChange(async (value) => {
+            this.plugin.settings.googleCalendarClientId = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Google Calendar OAuth Client Secret (optional)")
+      .setDesc("Optional for installed apps; supported for compatibility.")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        return text
+          .setPlaceholder("••••••••••••••••")
+          .setValue(this.plugin.settings.googleCalendarClientSecret)
+          .onChange(async (value) => {
+            this.plugin.settings.googleCalendarClientSecret = value.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Google Calendar id")
+      .setDesc("Leave empty for primary calendar.")
+      .addText((text) =>
+        text
+          .setPlaceholder("primary")
+          .setValue(this.plugin.settings.googleCalendarId)
+          .onChange(async (value) => {
+            this.plugin.settings.googleCalendarId = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Calendar auto-sync interval (minutes)")
+      .setDesc("Used by native provider. 0 = manual only.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(0, 30, 1)
+          .setValue(this.plugin.settings.googleCalendarAutoSyncMinutes)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.googleCalendarAutoSyncMinutes = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Calendar status")
+      .setDesc(this.plugin.formatGoogleCalendarStatus())
+      .addButton((btn) =>
+        btn.setButtonText("Refresh").onClick(() => {
+          new Notice(this.plugin.formatGoogleCalendarStatus(), 6000);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Calendar actions")
+      .setDesc("Connect native Google Calendar, inspect calendars, or disconnect.")
+      .addButton((btn) =>
+        btn
+          .setButtonText("Connect")
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.connectGoogleCalendar();
+          })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Show calendars").onClick(async () => {
+          const calendars = await this.plugin.listGoogleCalendars();
+          const msg =
+            calendars.length === 0
+              ? "No calendars (not authenticated yet)."
+              : calendars
+                  .map((c) => `${c.primary ? "★ " : ""}${c.title} — ${c.id}`)
+                  .join("\n");
+          new Notice(msg, 7000);
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Disconnect").onClick(async () => {
+          await this.plugin.disconnectGoogleCalendar();
+          new Notice("[Temporal Drift] Disconnected Google Calendar", 2500);
+        })
+      );
+
     new Setting(containerEl)
       .setName("Show thankful section")
       .setDesc("Display the 'Thankful for' section in daily notes")

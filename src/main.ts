@@ -60,7 +60,12 @@ export default class TemporalDriftPlugin extends Plugin {
     this.taskDrop = new TaskDropExtension(this.settings);
     this.taskAllocationSync = new TaskAllocationSync(this.app, this.settings);
 
-    this.calendarService = new CalendarService(this.app, this.settings);
+    this.calendarService = new CalendarService(this.app, this.settings, {
+      onGoogleCalendarTokenUpdate: async (token) => {
+        this.settings.googleCalendarToken = token;
+        await this.saveSettingsDataOnly();
+      },
+    });
     this.calendarEventSync = new CalendarEventSyncService(this.app, this.settings, this.calendarService);
 
     this.taskIndex = new TaskIndexService(this.app, this.settings);
@@ -243,7 +248,8 @@ export default class TemporalDriftPlugin extends Plugin {
 
     if (!this.calendarEventSync || !this.calendarService?.isAvailable()) return;
 
-    const ms = 5 * 60_000;
+    const ms = this.calendarService.getAutoSyncIntervalMs();
+    if (!ms) return;
     this.calendarSyncIntervalId = window.setInterval(() => {
       void this.syncCalendarDateNow(this.getPreferredCalendarSyncDate());
     }, ms);
@@ -276,6 +282,32 @@ export default class TemporalDriftPlugin extends Plugin {
 
     const preview = await this.calendarEventSync.previewDate(date);
     return this.calendarEventSync.formatPreviewSummary(preview);
+  }
+
+  async connectGoogleCalendar(): Promise<void> {
+    if (!this.calendarService) return;
+
+    if (!this.settings.googleCalendarClientId) {
+      new Notice("[Temporal Drift] Set Google Calendar client id in settings first", 4000);
+      return;
+    }
+
+    new Notice("[Temporal Drift] Opening Google Calendar OAuth…", 2500);
+    await this.calendarService.connectGoogleCalendar(this.openExternalUrl);
+  }
+
+  async disconnectGoogleCalendar(): Promise<void> {
+    await this.calendarService?.disconnectGoogleCalendar();
+    this.settings.googleCalendarToken = null;
+    await this.saveSettings();
+  }
+
+  async listGoogleCalendars(): Promise<Array<{ id: string; title: string; primary: boolean }>> {
+    return (await this.calendarService?.listGoogleCalendars()) ?? [];
+  }
+
+  formatGoogleCalendarStatus(): string {
+    return this.calendarService?.formatGoogleCalendarStatus() ?? "Calendar service unavailable.";
   }
 
   async restoreCalendarSuppressedForDate(date: string): Promise<number> {
@@ -324,16 +356,9 @@ export default class TemporalDriftPlugin extends Plugin {
       return;
     }
 
-    // Opening an external URL from Obsidian is annoyingly inconsistent across platforms.
-    const openWithDefaultApp = (this.app as any).openWithDefaultApp as ((url: string) => void) | undefined;
-    const openUrl = (url: string) => {
-      if (openWithDefaultApp) openWithDefaultApp(url);
-      else window.open(url);
-    };
-
     new Notice("[Temporal Drift] Opening Google OAuth…", 2500);
 
-    await this.googleTasksSync.beginAuthFlow(openUrl);
+    await this.googleTasksSync.beginAuthFlow(this.openExternalUrl);
   }
 
   async syncGoogleTasksNow(): Promise<void> {
@@ -383,6 +408,12 @@ export default class TemporalDriftPlugin extends Plugin {
 
     return parts.join("\n");
   }
+
+  private openExternalUrl = (url: string): void => {
+    const openWithDefaultApp = (this.app as any).openWithDefaultApp as ((url: string) => void) | undefined;
+    if (openWithDefaultApp) openWithDefaultApp(url);
+    else window.open(url);
+  };
 
   private async activateTaskPool(): Promise<void> {
     const { workspace } = this.app;

@@ -403,6 +403,31 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
   });
 
   plugin.addCommand({
+    id: "google-calendar-connect",
+    name: "Google Calendar: Connect",
+    callback: async () => {
+      await (plugin as any).connectGoogleCalendar?.();
+    },
+  });
+
+  plugin.addCommand({
+    id: "google-calendar-disconnect",
+    name: "Google Calendar: Disconnect",
+    callback: async () => {
+      await (plugin as any).disconnectGoogleCalendar?.();
+    },
+  });
+
+  plugin.addCommand({
+    id: "google-calendar-show-status",
+    name: "Google Calendar: Show status",
+    callback: async () => {
+      const summary = (plugin as any).formatGoogleCalendarStatus?.() as string | undefined;
+      new Notice(summary || "No Google Calendar status available.", 8000);
+    },
+  });
+
+  plugin.addCommand({
     id: "calendar-preview-sync",
     name: "Calendar: Preview active day sync",
     callback: async () => {

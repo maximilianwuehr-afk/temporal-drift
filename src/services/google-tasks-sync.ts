@@ -2,151 +2,49 @@
 // Google Tasks Sync Service (Obsidian Tasks/ ↔ Google Tasks)
 // ============================================================================
 
-import { App, Notice, TAbstractFile, TFile, debounce, normalizePath, requestUrl } from "obsidian";
-import http from "http";
-import crypto from "crypto";
+import { App, Notice, TAbstractFile, TFile, debounce, normalizePath } from "obsidian";
+
 import { GoogleTasksToken, TemporalDriftSettings, TaskMeta, GoogleTasksSyncStatus, GoogleTasksSyncStats } from "../types";
+import { GoogleAuthSession } from "./google/auth/google-auth-session";
+import { GoogleTasksRemoteClient } from "./google/tasks/google-tasks-remote-client";
+import {
+  buildObsidianNotes,
+  canonicalStatus,
+  decodeTaskTitle,
+  emptyPreviewCounts,
+  emptySyncStats,
+  encodeDueDay,
+  normalizeDueDay,
+  parseObsidianPathFromNotes,
+  parseRemoteDone,
+  sanitizeFileName,
+  isoDay,
+  toRemotePatch,
+} from "./google/tasks/task-codec";
+import {
+  GoogleTask,
+  GoogleTaskList,
+  GoogleTasksPreviewAction,
+  GoogleTasksPreviewItem,
+  GoogleTasksPreviewResult,
+} from "./google/tasks/types";
 import { TaskIndexService } from "./task-index";
 import { decideSyncPair } from "./google-sync-planner";
 
-type RemoteTaskStatus = "needsAction" | "completed";
-
-interface GoogleTask {
-  id: string;
-  title: string;
-  notes?: string;
-  status: RemoteTaskStatus;
-  due?: string;
-  updated: string;
-  etag: string;
-}
-
-interface GoogleTaskList {
-  id: string;
-  title: string;
-}
-
-export type GoogleTasksPreviewAction =
-  | "create_remote"
-  | "update_remote"
-  | "update_local"
-  | "create_local"
-  | "noop"
-  | "conflict";
-
-export interface GoogleTasksPreviewItem {
-  action: GoogleTasksPreviewAction;
-  path: string;
-  taskId?: string;
-  reason?: string;
-}
-
-export interface GoogleTasksPreviewResult {
-  listId: string;
-  generatedAt: number;
-  counts: Record<GoogleTasksPreviewAction, number>;
-  items: GoogleTasksPreviewItem[];
-}
-
-function sanitizeFileName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, "-").trim();
-}
-
-function parseObsidianPathFromNotes(notes?: string): string | null {
-  if (!notes) return null;
-  const m = notes.match(/Obsidian:\s*([^\n]+)/i);
-  return m?.[1]?.trim() || null;
-}
-
-function encodeTaskTitle(task: { title: string; priority: "now" | "next" | "later" }): string {
-  return `[${task.priority.toUpperCase()}] ${task.title}`;
-}
-
-function decodeTaskTitle(title: string): { title: string; priority: "now" | "next" | "later" } {
-  const match = title.match(/^\[(NOW|NEXT|LATER)\]\s*(.*)$/i);
-  if (match) {
-    return {
-      priority: match[1].toLowerCase() as "now" | "next" | "later",
-      title: match[2],
-    };
-  }
-  return { title, priority: "now" };
-}
-
-function canonicalStatus(done: boolean): "open" | "done" {
-  return done ? "done" : "open";
-}
-
-function parseRemoteDone(status: RemoteTaskStatus): boolean {
-  return status === "completed";
-}
-
-function normalizeDueDay(due?: string): string | null {
-  if (!due) return null;
-  const m = due.match(/^\d{4}-\d{2}-\d{2}/);
-  return m ? m[0] : null;
-}
-
-function encodeDueDay(due?: string): string | undefined {
-  const day = normalizeDueDay(due);
-  return day ? `${day}T00:00:00.000Z` : undefined;
-}
-
-function buildObsidianNotes(path: string, notes?: string): string {
-  const marker = `Obsidian: ${path}`;
-  if (!notes?.trim()) return marker;
-  const withoutMarker = notes
-    .split("\n")
-    .filter((line) => !/^\s*Obsidian:\s*/i.test(line))
-    .join("\n")
-    .trim();
-  return withoutMarker ? `${withoutMarker}\n${marker}` : marker;
-}
-
-function isoDay(date: Date): string {
-  return date.toISOString().split("T")[0];
-}
-
-function base64Url(buf: Buffer): string {
-  return buf
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function sha256Base64Url(input: string): string {
-  return base64Url(crypto.createHash("sha256").update(input).digest());
-}
-
-function emptySyncStats(): GoogleTasksSyncStats {
-  return {
-    remoteCreates: 0,
-    remotePatches: 0,
-    remoteNoops: 0,
-    localCreates: 0,
-    localPulls: 0,
-    localNoops: 0,
-    conflicts: 0,
-  };
-}
-
-function emptyPreviewCounts(): Record<GoogleTasksPreviewAction, number> {
-  return {
-    create_remote: 0,
-    update_remote: 0,
-    update_local: 0,
-    create_local: 0,
-    noop: 0,
-    conflict: 0,
-  };
-}
+export type {
+  GoogleTaskList,
+  GoogleTasksPreviewAction,
+  GoogleTasksPreviewItem,
+  GoogleTasksPreviewResult,
+};
 
 export class GoogleTasksSyncService {
   private app: App;
   private settings: TemporalDriftSettings;
   private taskIndex: TaskIndexService;
   private token: GoogleTasksToken | null;
+  private auth: GoogleAuthSession;
+  private remoteClient: GoogleTasksRemoteClient;
 
   private syncInProgress = false;
   private debouncedSync: (() => void) | null = null;
@@ -184,6 +82,25 @@ export class GoogleTasksSyncService {
     this.onTokenUpdate = opts.onTokenUpdate;
     this.onStatusUpdate = opts.onStatusUpdate;
 
+    this.auth = new GoogleAuthSession({
+      scope: "https://www.googleapis.com/auth/tasks",
+      token: this.token,
+      getClientId: () => this.settings.googleTasksClientId,
+      getClientSecret: () => this.settings.googleTasksClientSecret,
+      onTokenUpdate: async (token) => {
+        this.token = token as GoogleTasksToken | null;
+        await this.onTokenUpdate(this.token);
+      },
+    });
+
+    this.remoteClient = new GoogleTasksRemoteClient({
+      auth: this.auth,
+      getListId: () => this.settings.googleTasksListId,
+      onTokenRefresh: () => {
+        this.token = this.auth.getToken() as GoogleTasksToken | null;
+      },
+    });
+
     this.setupDebouncedSync();
     this.emitStatus();
   }
@@ -191,6 +108,7 @@ export class GoogleTasksSyncService {
   updateSettings(settings: TemporalDriftSettings): void {
     this.settings = settings;
     this.token = settings.googleTasksToken;
+    this.auth.updateToken(this.token);
   }
 
   getStatus(): GoogleTasksSyncStatus {
@@ -222,28 +140,11 @@ export class GoogleTasksSyncService {
   }
 
   isConfigured(): boolean {
-    return !!(this.settings.googleTasksEnabled && this.settings.googleTasksClientId && this.token);
-  }
-
-  private buildAuthUrl(opts: { redirectUri: string; codeChallenge: string }): string {
-    const scope = "https://www.googleapis.com/auth/tasks";
-
-    return (
-      `https://accounts.google.com/o/oauth2/v2/auth?` +
-      `client_id=${encodeURIComponent(this.settings.googleTasksClientId)}&` +
-      `redirect_uri=${encodeURIComponent(opts.redirectUri)}&` +
-      `response_type=code&` +
-      `scope=${encodeURIComponent(scope)}&` +
-      `access_type=offline&` +
-      `prompt=consent&` +
-      `code_challenge=${encodeURIComponent(opts.codeChallenge)}&` +
-      `code_challenge_method=S256`
-    );
+    return !!(this.settings.googleTasksEnabled && this.settings.googleTasksClientId && this.auth.isAuthenticated());
   }
 
   /**
-   * Starts a loopback OAuth flow (PKCE). Opens the consent screen in the user's browser,
-   * captures the authorization code via a temporary localhost server, and stores tokens.
+   * Starts a loopback OAuth flow (PKCE).
    */
   async beginAuthFlow(openUrl: (url: string) => void): Promise<void> {
     if (!this.settings.googleTasksClientId) {
@@ -251,111 +152,18 @@ export class GoogleTasksSyncService {
       return;
     }
 
-    const verifier = base64Url(crypto.randomBytes(32));
-    const challenge = sha256Base64Url(verifier);
-
-    const server = http.createServer();
-
-    const codePromise = new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("OAuth timeout"));
-      }, 3 * 60_000);
-
-      server.on("request", (req, res) => {
-        try {
-          const url = new URL(req.url ?? "/", "http://127.0.0.1");
-          const code = url.searchParams.get("code");
-          const err = url.searchParams.get("error");
-
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "text/html; charset=utf-8");
-
-          if (err) {
-            res.end(`<h3>Authorization failed</h3><p>${err}</p><p>You may close this window.</p>`);
-            clearTimeout(timeout);
-            reject(new Error(String(err)));
-            return;
-          }
-
-          if (!code) {
-            res.end("<p>Waiting for authorization…</p>");
-            return;
-          }
-
-          res.end("<h3>Connected.</h3><p>You may close this window and return to Obsidian.</p>");
-
-          const address = server.address();
-          const port = typeof address === "object" && address ? address.port : 0;
-          const redirectUri = `http://127.0.0.1:${port}/oauth2callback`;
-
-          clearTimeout(timeout);
-          resolve({ code, redirectUri });
-        } catch (e) {
-          clearTimeout(timeout);
-          reject(e);
-        }
-      });
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-      server.on("error", reject);
-    });
-
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    const redirectUri = `http://127.0.0.1:${port}/oauth2callback`;
-
-    openUrl(this.buildAuthUrl({ redirectUri, codeChallenge: challenge }));
-
-    try {
-      const { code: authCode, redirectUri: finalRedirect } = await codePromise;
-      await this.exchangeAuthCode({ code: authCode, redirectUri: finalRedirect, verifier });
-    } finally {
-      server.close();
-    }
+    await this.auth.beginAuthFlow(openUrl);
   }
 
-  private async exchangeAuthCode(opts: { code: string; redirectUri: string; verifier: string }): Promise<void> {
-    const body = new URLSearchParams({
-      client_id: this.settings.googleTasksClientId,
-      code: opts.code,
-      code_verifier: opts.verifier,
-      grant_type: "authorization_code",
-      redirect_uri: opts.redirectUri,
-    });
-
-    // Client secret is optional (desktop apps shouldn't rely on it, but allow it for compatibility).
-    if (this.settings.googleTasksClientSecret?.trim()) {
-      body.set("client_secret", this.settings.googleTasksClientSecret.trim());
-    }
-
-    const response = await requestUrl({
-      url: "https://oauth2.googleapis.com/token",
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    });
-
-    const data = response.json as any;
-    const next: GoogleTasksToken = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: Date.now() + data.expires_in * 1000,
-    };
-
-    this.token = next;
-    await this.onTokenUpdate(next);
-  }
-
-  disconnect(): Promise<void> {
-    this.token = null;
+  async disconnect(): Promise<void> {
     this.updateStatus({
       state: "idle",
       inProgress: false,
       lastError: null,
     });
-    return this.onTokenUpdate(null);
+
+    await this.auth.disconnect();
+    this.token = null;
   }
 
   triggerSync(): void {
@@ -367,100 +175,20 @@ export class GoogleTasksSyncService {
   // Remote API
   // ---------------------------------------------------------------------------
 
-  private async refreshToken(): Promise<void> {
-    if (!this.token?.refresh_token) throw new Error("No refresh token");
-
-    const body = new URLSearchParams({
-      client_id: this.settings.googleTasksClientId,
-      refresh_token: this.token.refresh_token,
-      grant_type: "refresh_token",
-    });
-
-    if (this.settings.googleTasksClientSecret?.trim()) {
-      body.set("client_secret", this.settings.googleTasksClientSecret.trim());
-    }
-
-    const response = await requestUrl({
-      url: "https://oauth2.googleapis.com/token",
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    });
-
-    const data = response.json as any;
-    const next: GoogleTasksToken = {
-      ...this.token,
-      access_token: data.access_token,
-      expires_at: Date.now() + data.expires_in * 1000,
-    };
-
-    this.token = next;
-    await this.onTokenUpdate(next);
-  }
-
-  private async getAccessToken(): Promise<string> {
-    if (!this.token) throw new Error("Not authenticated");
-
-    // refresh if expires in next 5 minutes
-    if (Date.now() > this.token.expires_at - 300_000) {
-      await this.refreshToken();
-    }
-
-    return this.token.access_token;
-  }
-
   private async fetchLists(): Promise<GoogleTaskList[]> {
-    const accessToken = await this.getAccessToken();
-
-    const listsResponse = await requestUrl({
-      url: "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    const items = (listsResponse.json as any).items ?? [];
-    return items.map((l: any) => ({ id: String(l.id), title: String(l.title ?? "") }));
+    return await this.remoteClient.listTaskLists();
   }
 
   private async resolveListId(): Promise<string> {
-    if (this.settings.googleTasksListId?.trim()) return this.settings.googleTasksListId.trim();
-
-    const lists = await this.fetchLists();
-    const first = lists[0]?.id;
-    if (!first) throw new Error("No Google Task lists found");
-
-    return first;
+    return await this.remoteClient.resolveListId();
   }
 
   private async fetchRemoteTasks(listId: string): Promise<GoogleTask[]> {
-    const accessToken = await this.getAccessToken();
-
-    const tasksResponse = await requestUrl({
-      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks?showCompleted=true&showHidden=true&maxResults=1000`,
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    return ((tasksResponse.json as any).items ?? []) as GoogleTask[];
+    return await this.remoteClient.listTasks(listId);
   }
 
   private async createRemoteTask(listId: string, task: TaskMeta): Promise<GoogleTask> {
-    const accessToken = await this.getAccessToken();
-
-    const response = await requestUrl({
-      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks`,
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        title: encodeTaskTitle(task),
-        notes: buildObsidianNotes(task.path),
-        status: task.status === "done" ? "completed" : "needsAction",
-        due: encodeDueDay(task.due),
-      }),
-    });
-
-    return response.json as any;
+    return await this.remoteClient.createTask(listId, task);
   }
 
   private async patchRemoteTask(
@@ -469,36 +197,11 @@ export class GoogleTasksSyncService {
     patch: Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">>,
     opts?: { ifMatchEtag?: string }
   ): Promise<GoogleTask> {
-    const accessToken = await this.getAccessToken();
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    };
-
-    if (opts?.ifMatchEtag?.trim()) {
-      headers["If-Match"] = opts.ifMatchEtag.trim();
-    }
-
-    const response = await requestUrl({
-      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks/${taskId}`,
-      method: "PATCH",
-      headers,
-      body: JSON.stringify(patch),
-    });
-
-    return response.json as any;
+    return await this.remoteClient.patchTask(listId, taskId, patch, opts);
   }
 
   private async fetchRemoteTaskById(listId: string, taskId: string): Promise<GoogleTask> {
-    const accessToken = await this.getAccessToken();
-
-    const response = await requestUrl({
-      url: `https://tasks.googleapis.com/tasks/v1/lists/${listId}/tasks/${taskId}`,
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    return response.json as any;
+    return await this.remoteClient.getTaskById(listId, taskId);
   }
 
   // ---------------------------------------------------------------------------
@@ -581,12 +284,7 @@ export class GoogleTasksSyncService {
   }
 
   private remotePayloadFromLocal(local: TaskMeta, remote?: GoogleTask): Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">> {
-    return {
-      title: encodeTaskTitle(local),
-      status: local.status === "done" ? "completed" : "needsAction",
-      due: encodeDueDay(local.due),
-      notes: buildObsidianNotes(local.path, remote?.notes),
-    };
+    return toRemotePatch(local, remote);
   }
 
   private remoteMatchesLocal(local: TaskMeta, remote: GoogleTask): boolean {

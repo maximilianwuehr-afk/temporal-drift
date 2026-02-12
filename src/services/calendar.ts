@@ -1,89 +1,103 @@
 // ============================================================================
-// Calendar Service - Google Calendar Integration
+// Calendar Service - Provider Selection + Participant Resolution
 // ============================================================================
 
 import { App, TFile } from "obsidian";
-import { TemporalDriftSettings, SettingsAware, Participant, CalendarEvent } from "../types";
+
+import { TemporalDriftSettings, SettingsAware, Participant, CalendarEvent, GoogleOAuthToken } from "../types";
+import { GoogleCalendarApiProvider } from "./google/calendar/google-calendar-api-provider";
+import { GoogleCalendarPluginProvider } from "./google/calendar/google-calendar-plugin-provider";
+import { CalendarProvider, CalendarProviderId } from "./google/calendar/provider-types";
 
 // Re-export for compatibility
 export type { Participant, CalendarEvent };
 
+interface CalendarServiceOptions {
+  onGoogleCalendarTokenUpdate?: (token: GoogleOAuthToken | null) => Promise<void>;
+}
+
 export class CalendarService implements SettingsAware {
   private app: App;
   private settings: TemporalDriftSettings;
-  private calendarPlugin: any = null;
 
-  constructor(app: App, settings: TemporalDriftSettings) {
+  private pluginProvider: GoogleCalendarPluginProvider;
+  private nativeProvider: GoogleCalendarApiProvider;
+
+  constructor(app: App, settings: TemporalDriftSettings, options: CalendarServiceOptions = {}) {
     this.app = app;
     this.settings = settings;
+
+    this.pluginProvider = new GoogleCalendarPluginProvider(app, settings);
+    this.nativeProvider = new GoogleCalendarApiProvider(settings, {
+      onTokenUpdate: options.onGoogleCalendarTokenUpdate ?? (async () => {}),
+    });
   }
 
   updateSettings(settings: TemporalDriftSettings): void {
     this.settings = settings;
+    this.pluginProvider.updateSettings(settings);
+    this.nativeProvider.updateSettings(settings);
   }
 
-  /**
-   * Check if Google Calendar plugin is available
-   */
   isAvailable(): boolean {
-    this.calendarPlugin = (this.app as any).plugins?.getPlugin("google-calendar");
-    return !!this.calendarPlugin;
+    return !!this.resolveActiveProvider();
+  }
+
+  getActiveProviderId(): CalendarProviderId | null {
+    return this.resolveActiveProvider()?.id ?? null;
+  }
+
+  getAutoSyncIntervalMs(): number | null {
+    const provider = this.resolveActiveProvider();
+    if (!provider) return null;
+
+    return provider.getSyncIntervalMs?.() ?? 5 * 60_000;
+  }
+
+  getSyncSourceId(): string {
+    const provider = this.resolveActiveProvider();
+    if (!provider) return "none";
+
+    if (provider.id === "native") {
+      const calendarId = this.settings.googleCalendarId?.trim() || "primary";
+      return `google:${calendarId}`;
+    }
+
+    return "plugin:google-calendar";
   }
 
   /**
-   * Get events for a specific date
+   * Get events for a specific date from the active provider.
    */
   async getEventsForDate(date: Date): Promise<CalendarEvent[]> {
-    if (!this.isAvailable()) {
-      return [];
-    }
+    const provider = this.resolveActiveProvider();
+    if (!provider) return [];
 
-    try {
-      // Try to access the calendar plugin's API
-      const api = this.calendarPlugin?.api;
-      if (!api?.getEvents) {
-        return [];
-      }
+    return await provider.getEventsForDate(date);
+  }
 
-      const events = await api.getEvents(date);
-      return events.map((event: any) => this.mapEvent(event));
-    } catch (e) {
-      console.warn("Temporal Drift: Failed to fetch calendar events", e);
-      return [];
-    }
+  async connectGoogleCalendar(openUrl: (url: string) => void): Promise<void> {
+    await this.nativeProvider.connect(openUrl);
+  }
+
+  async disconnectGoogleCalendar(): Promise<void> {
+    await this.nativeProvider.disconnect();
+  }
+
+  async listGoogleCalendars(): Promise<Array<{ id: string; title: string; primary: boolean }>> {
+    return await this.nativeProvider.listCalendars();
+  }
+
+  formatGoogleCalendarStatus(): string {
+    const active = this.getActiveProviderId() ?? "none";
+    const selected = this.settings.calendarProvider;
+    const native = this.nativeProvider.formatStatus();
+
+    return [`Selected provider mode: ${selected}`, `Active provider: ${active}`, native].join("\n");
   }
 
   /**
-   * Map external event format to our interface
-   */
-  private mapEvent(event: any): CalendarEvent {
-    return {
-      id: event.id || "",
-      title: event.title || event.summary || "",
-      start: new Date(event.start?.dateTime || event.start?.date || event.start),
-      end: new Date(event.end?.dateTime || event.end?.date || event.end),
-      participants: this.extractParticipants(event),
-      location: event.location,
-      description: event.description,
-    };
-  }
-
-  /**
-   * Extract participants with name and email from event
-   */
-  private extractParticipants(event: any): Participant[] {
-    const attendees = event.attendees || [];
-    return attendees
-      .filter((a: any) => !a.resource && !a.self)
-      .map((a: any) => ({
-        name: a.displayName || this.emailToDisplayName(a.email || ""),
-        email: a.email || "",
-      }))
-      .filter((p: Participant) => p.email.length > 0);
-  }
-
-  /**
-   * Resolve participant email to People note
+   * Resolve participant email to People note.
    */
   async resolveParticipant(email: string): Promise<TFile | null> {
     const peopleFolder = this.settings.peopleFolder;
@@ -104,7 +118,7 @@ export class CalendarService implements SettingsAware {
   }
 
   /**
-   * Create a People note for an email address
+   * Create a People note for an email address.
    */
   async createPersonNote(email: string): Promise<TFile> {
     const displayName = this.emailToDisplayName(email);
@@ -117,27 +131,42 @@ email: ${email}
 # ${displayName}
 `;
 
-    const file = await this.app.vault.create(path, content);
-    return file;
+    return await this.app.vault.create(path, content);
   }
 
   /**
-   * Convert email to display name
+   * Get or create a People note for an email.
    */
+  async getOrCreatePerson(email: string): Promise<TFile> {
+    const existing = await this.resolveParticipant(email);
+    if (existing) return existing;
+
+    return await this.createPersonNote(email);
+  }
+
+  private resolveActiveProvider(): CalendarProvider | null {
+    const mode = this.settings.calendarProvider ?? "auto";
+
+    if (mode === "plugin") {
+      return this.pluginProvider.isAvailable() ? this.pluginProvider : null;
+    }
+
+    if (mode === "native") {
+      return this.nativeProvider.isAvailable() ? this.nativeProvider : null;
+    }
+
+    // auto mode
+    if (this.nativeProvider.isAvailable()) return this.nativeProvider;
+    if (this.pluginProvider.isAvailable()) return this.pluginProvider;
+
+    return null;
+  }
+
   private emailToDisplayName(email: string): string {
     const localPart = email.split("@")[0];
     return localPart
       .split(/[._-]/)
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
       .join(" ");
-  }
-
-  /**
-   * Get or create a People note for an email
-   */
-  async getOrCreatePerson(email: string): Promise<TFile> {
-    const existing = await this.resolveParticipant(email);
-    if (existing) return existing;
-    return await this.createPersonNote(email);
   }
 }

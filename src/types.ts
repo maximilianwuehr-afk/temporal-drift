@@ -6,11 +6,13 @@
 // Settings
 // ============================================================================
 
-export interface GoogleTasksToken {
+export interface GoogleOAuthToken {
   access_token: string;
   refresh_token: string;
   expires_at: number;
 }
+
+export type GoogleTasksToken = GoogleOAuthToken;
 
 export interface GoogleTasksSyncStats {
   remoteCreates: number;
@@ -43,6 +45,16 @@ export interface TemporalDriftSettings {
   showFocus: boolean;
   calendarDays: number;
 
+  // Calendar provider
+  calendarProvider: "auto" | "plugin" | "native";
+
+  // Native Google Calendar (optional)
+  googleCalendarClientId: string;
+  googleCalendarClientSecret: string;
+  googleCalendarToken: GoogleOAuthToken | null;
+  googleCalendarId: string; // empty => primary
+  googleCalendarAutoSyncMinutes: number; // 0 => manual only
+
   // Google Tasks Sync (optional)
   googleTasksEnabled: boolean;
   googleTasksClientId: string;
@@ -62,6 +74,14 @@ export const DEFAULT_SETTINGS: TemporalDriftSettings = {
   showThankful: true,
   showFocus: true,
   calendarDays: 7,
+
+  calendarProvider: "auto",
+
+  googleCalendarClientId: "",
+  googleCalendarClientSecret: "",
+  googleCalendarToken: null,
+  googleCalendarId: "",
+  googleCalendarAutoSyncMinutes: 5,
 
   googleTasksEnabled: false,
   googleTasksClientId: "",
