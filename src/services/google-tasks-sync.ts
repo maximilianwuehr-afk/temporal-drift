@@ -7,20 +7,8 @@ import { App, Notice, TAbstractFile, TFile, debounce, normalizePath } from "obsi
 import { GoogleTasksToken, TemporalDriftSettings, TaskMeta, GoogleTasksSyncStatus, GoogleTasksSyncStats } from "../types";
 import { GoogleAuthSession } from "./google/auth/google-auth-session";
 import { GoogleTasksRemoteClient } from "./google/tasks/google-tasks-remote-client";
-import {
-  buildObsidianNotes,
-  canonicalStatus,
-  decodeTaskTitle,
-  emptyPreviewCounts,
-  emptySyncStats,
-  encodeDueDay,
-  normalizeDueDay,
-  parseObsidianPathFromNotes,
-  parseRemoteDone,
-  sanitizeFileName,
-  isoDay,
-  toRemotePatch,
-} from "./google/tasks/task-codec";
+import { LocalTaskReconciliation } from "./google/tasks/local-task-reconciliation";
+import { emptyPreviewCounts, emptySyncStats, parseObsidianPathFromNotes } from "./google/tasks/task-codec";
 import {
   GoogleTask,
   GoogleTaskList,
@@ -45,6 +33,7 @@ export class GoogleTasksSyncService {
   private token: GoogleTasksToken | null;
   private auth: GoogleAuthSession;
   private remoteClient: GoogleTasksRemoteClient;
+  private localReconciliation: LocalTaskReconciliation;
 
   private syncInProgress = false;
   private debouncedSync: (() => void) | null = null;
@@ -99,6 +88,19 @@ export class GoogleTasksSyncService {
       onTokenRefresh: () => {
         this.token = this.auth.getToken() as GoogleTasksToken | null;
       },
+    });
+
+    this.localReconciliation = new LocalTaskReconciliation({
+      app: this.app,
+      getTasksFolder: () => this.settings.tasksFolder,
+      getFrontmatter: this.getFrontmatter.bind(this),
+      getLocalTaskMeta: this.getLocalTaskMeta.bind(this),
+      computeSyncStamp: this.computeSyncStamp.bind(this),
+      writeSyncMeta: this.writeSyncMeta.bind(this),
+      patchRemoteTask: this.patchRemoteTask.bind(this),
+      fetchRemoteTaskById: this.fetchRemoteTaskById.bind(this),
+      logSyncDecision: this.logSyncDecision.bind(this),
+      getHttpStatus: this.getHttpStatus.bind(this),
     });
 
     this.setupDebouncedSync();
@@ -283,20 +285,10 @@ export class GoogleTasksSyncService {
     });
   }
 
-  private remotePayloadFromLocal(local: TaskMeta, remote?: GoogleTask): Partial<Pick<GoogleTask, "title" | "status" | "due" | "notes">> {
-    return toRemotePatch(local, remote);
-  }
+  // moved to LocalTaskReconciliation
 
   private remoteMatchesLocal(local: TaskMeta, remote: GoogleTask): boolean {
-    const expected = this.remotePayloadFromLocal(local, remote);
-    const remoteDue = normalizeDueDay(remote.due);
-    const expectedDue = normalizeDueDay(expected.due);
-    return (
-      remote.title === expected.title &&
-      remote.status === expected.status &&
-      remoteDue === expectedDue &&
-      parseObsidianPathFromNotes(remote.notes) === local.path
-    );
+    return this.localReconciliation.remoteMatchesLocal(local, remote);
   }
 
   private logSyncDecision(action: string, payload: Record<string, unknown>): void {
