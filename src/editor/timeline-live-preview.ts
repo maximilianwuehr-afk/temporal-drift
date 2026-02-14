@@ -25,6 +25,7 @@ import { pathInFolder } from "../utils/folder-match";
 import { openWikiLinkFromCard } from "../utils/timeline-link-open";
 
 const MAX_BODY_LINES = 8;
+const MAX_VISIBLE_PARTICIPANTS = 3;
 
 type Participant = { target: string; display: string };
 
@@ -48,11 +49,12 @@ type TimelineEntry = {
   taskLinkPath: string | null;
 };
 
-function getFirstName(name: string): string {
+function getInitials(name: string): string {
   const cleaned = name.replace(/\[\[|\]\]/g, "").trim();
   const parts = cleaned.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "";
-  return parts[0];
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 function parseTimeWindow(timeText: string): { start: number; end: number | null } | null {
@@ -69,6 +71,20 @@ function parseTimeWindow(timeText: string): { start: number; end: number | null 
   };
 }
 
+function formatDuration(timeText: string): string {
+  const window = parseTimeWindow(timeText);
+  if (!window || window.end === null) return "";
+
+  const minutes = window.end - window.start;
+  if (minutes <= 0) return "";
+
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${mins}m`;
+}
+
 function isEntryNow(timeText: string, now = new Date()): boolean {
   const window = parseTimeWindow(timeText);
   if (!window) return false;
@@ -79,6 +95,27 @@ function isEntryNow(timeText: string, now = new Date()): boolean {
   }
 
   return currentMinutes >= window.start && currentMinutes < window.start + 60;
+}
+
+function buildContextLines(bodyLines: string[], joinUrl: string | null): string[] {
+  const out: string[] = [];
+
+  for (const line of bodyLines) {
+    const cleaned = stripWikilinks(line.trim().replace(/^[-*+]\s+/, "").trim());
+    if (!cleaned) continue;
+    if (joinUrl && (cleaned.includes(joinUrl) || /^meeting link\s*:/i.test(cleaned))) continue;
+    out.push(cleaned);
+  }
+
+  return out;
+}
+
+function contextIconForLine(line: string): string {
+  const lower = line.toLowerCase();
+  if (lower.includes("agenda") || lower.includes("next") || lower.includes("todo")) return "→";
+  if (lower.includes("last") || lower.includes("follow-up") || lower.includes("follow up")) return "↺";
+  if (lower.includes("link") || lower.includes("doc") || lower.includes("thread")) return "↗";
+  return "◆";
 }
 
 function focusAdjacentCard(current: HTMLElement, direction: 1 | -1): void {
@@ -240,7 +277,8 @@ class TimelineCardWidget extends WidgetType {
     const timeEl = document.createElement("div");
     timeEl.className = "hour-time";
 
-    if (isEntryNow(this.entry.time)) {
+    const entryIsNow = isEntryNow(this.entry.time);
+    if (entryIsNow) {
       hour.classList.add("now");
       timeEl.classList.add("is-now");
       const dot = document.createElement("span");
@@ -263,16 +301,17 @@ class TimelineCardWidget extends WidgetType {
 
     const card = document.createElement("div");
     card.className = "event";
+    if (entryIsNow) card.classList.add("active");
     if (this.entry.kind === "task") card.classList.add("event--task");
     if (this.entry.kind === "task" && this.entry.taskDone) card.classList.add("event--task-done");
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `Timeline entry ${this.entry.time}`);
 
-    const headline = document.createElement("div");
-    headline.className = "event-headline";
-
     if (this.entry.kind === "task") {
+      const headline = document.createElement("div");
+      headline.className = "event-headline";
+
       const bubble = document.createElement("button");
       bubble.type = "button";
       bubble.className = `task-bubble${this.entry.taskDone ? " done" : ""}`;
@@ -297,17 +336,36 @@ class TimelineCardWidget extends WidgetType {
         priority.textContent = `#${this.entry.taskPriority}`;
         headline.appendChild(priority);
       }
+
+      card.appendChild(headline);
     } else {
-      const title = document.createElement("span");
+      const top = document.createElement("div");
+      top.className = "event-top";
+
+      const left = document.createElement("div");
+      left.className = "event-main";
+
+      const title = document.createElement("div");
       title.className = "event-title";
       title.textContent = this.entry.title;
-      headline.appendChild(title);
+      left.appendChild(title);
 
       if (this.entry.locationText) {
-        const location = document.createElement("span");
-        location.className = "event-at";
-        location.textContent = ` @ ${this.entry.locationText}`;
-        headline.appendChild(location);
+        const location = document.createElement("div");
+        location.className = "event-location";
+        location.textContent = this.entry.locationText;
+        left.appendChild(location);
+      }
+
+      const right = document.createElement("div");
+      right.className = "event-right";
+
+      const durationText = formatDuration(this.entry.time);
+      if (durationText) {
+        const duration = document.createElement("span");
+        duration.className = "event-duration";
+        duration.textContent = durationText;
+        right.appendChild(duration);
       }
 
       const joinUrl = this.entry.joinUrl;
@@ -315,29 +373,41 @@ class TimelineCardWidget extends WidgetType {
         const join = document.createElement("a");
         join.className = "join-pill";
         join.href = "#";
-        join.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>join`;
+        join.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>Join`;
         join.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
           openExternalUrl(joinUrl);
         });
-        headline.appendChild(join);
+        right.appendChild(join);
       }
-    }
 
-    card.appendChild(headline);
+      top.appendChild(left);
+      top.appendChild(right);
+      card.appendChild(top);
+    }
 
     if (this.entry.participants.length > 0) {
       const peopleRow = document.createElement("div");
-      peopleRow.className = "people-row";
+      peopleRow.className = "event-participants";
 
-      for (const p of this.entry.participants) {
+      const visibleParticipants = this.entry.participants.slice(0, MAX_VISIBLE_PARTICIPANTS);
+      for (const p of visibleParticipants) {
         const person = document.createElement("a");
-        person.className = "person-badge";
+        person.className = "participant";
         person.href = "#";
         person.setAttribute("role", "button");
         person.setAttribute("aria-label", `Open ${p.display}`);
-        person.textContent = getFirstName(p.display);
+
+        const avatar = document.createElement("span");
+        avatar.className = "participant-avatar";
+        avatar.textContent = getInitials(p.display);
+        person.appendChild(avatar);
+
+        const label = document.createElement("span");
+        label.className = "participant-label";
+        label.textContent = p.display;
+        person.appendChild(label);
 
         person.addEventListener("click", (e) => {
           e.preventDefault();
@@ -356,31 +426,69 @@ class TimelineCardWidget extends WidgetType {
         peopleRow.appendChild(person);
       }
 
+      const overflow = this.entry.participants.length - visibleParticipants.length;
+      if (overflow > 0) {
+        const more = document.createElement("span");
+        more.className = "participant participant-more";
+
+        const av = document.createElement("span");
+        av.className = "participant-avatar";
+        av.textContent = `+${overflow}`;
+        more.appendChild(av);
+
+        const text = document.createElement("span");
+        text.className = "participant-label";
+        text.textContent = `${overflow} attendees`;
+        more.appendChild(text);
+
+        peopleRow.appendChild(more);
+      }
+
       card.appendChild(peopleRow);
     }
 
-    const nonEmptyBody = this.entry.bodyLines.filter((line) => line.trim().length > 0);
-    if (nonEmptyBody.length > 0) {
-      const bodyLine = document.createElement("div");
-      bodyLine.className = "briefing-line";
+    const contextLines = buildContextLines(this.entry.bodyLines, this.entry.joinUrl);
+    if (contextLines.length > 0) {
+      const context = document.createElement("div");
+      context.className = "event-context";
 
-      const label = document.createElement("span");
-      label.className = "briefing-label";
-      label.textContent = this.entry.kind === "task" ? "DETAILS" : "BRIEFING";
-      bodyLine.appendChild(label);
+      const visible = contextLines.slice(0, MAX_BODY_LINES);
+      for (const line of visible) {
+        const contextLine = document.createElement("div");
+        contextLine.className = "context-line";
 
-      const text = document.createElement("span");
-      text.className = "briefing-text";
-      const visible = nonEmptyBody.slice(0, MAX_BODY_LINES).map((line) => {
-        const cleaned = line.trim().replace(/^[-*+]\s+/, "• ");
-        return stripWikilinks(cleaned);
-      });
-      const overflow = nonEmptyBody.length - visible.length;
-      if (overflow > 0) visible.push(`… +${overflow} more`);
-      text.textContent = visible.join(" ");
-      bodyLine.appendChild(text);
+        const icon = document.createElement("span");
+        icon.className = "context-icon";
+        icon.textContent = contextIconForLine(line);
+        contextLine.appendChild(icon);
 
-      card.appendChild(bodyLine);
+        const text = document.createElement("span");
+        text.className = "context-text";
+        text.textContent = line;
+        contextLine.appendChild(text);
+
+        context.appendChild(contextLine);
+      }
+
+      const overflow = contextLines.length - visible.length;
+      if (overflow > 0) {
+        const moreLine = document.createElement("div");
+        moreLine.className = "context-line context-line-more";
+
+        const icon = document.createElement("span");
+        icon.className = "context-icon";
+        icon.textContent = "…";
+        moreLine.appendChild(icon);
+
+        const text = document.createElement("span");
+        text.className = "context-text";
+        text.textContent = `${overflow} more note${overflow === 1 ? "" : "s"}`;
+        moreLine.appendChild(text);
+
+        context.appendChild(moreLine);
+      }
+
+      card.appendChild(context);
     }
 
     card.addEventListener("click", (e) => {
@@ -501,7 +609,8 @@ function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
       if (!primary || task.isTask) return "";
       let t = head;
       t = t.replace(/^\s*\[\[[^\]]+\]\]\s*/, "");
-      const withIdx = t.indexOf(" with ");
+      if (/^with\s/i.test(t)) return "";
+      const withIdx = t.search(/\swith\s/i);
       if (withIdx >= 0) t = t.slice(0, withIdx);
       return stripWikilinks(t).trim();
     })();
