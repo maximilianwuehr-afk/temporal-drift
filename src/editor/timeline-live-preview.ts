@@ -14,8 +14,12 @@ import { isTimelineLine, parseTimelineLine } from "../parsing/timeline";
 import { formatTime } from "../utils/time";
 import { pathInFolder } from "../utils/folder-match";
 import { openWikiLinkFromCard } from "../utils/timeline-link-open";
-import { createTimelineCardModel, TimelineCardModel } from "../timeline/card-model";
-import { renderTimelineCardDom } from "../timeline/card-dom";
+import {
+  createTimelineCardModel,
+  createTimelineHeaderModel,
+  TimelineCardModel,
+} from "../timeline/card-model";
+import { renderTimelineCardDom, renderTimelineHeaderDom } from "../timeline/card-dom";
 
 type TimelineEntry = {
   from: number; // doc offset start of block
@@ -124,6 +128,20 @@ class EmptyDailyStateWidget extends WidgetType {
     root.appendChild(card);
 
     return root;
+  }
+}
+
+class TimelineHeaderWidget extends WidgetType {
+  constructor(private dateLabel: string) {
+    super();
+  }
+
+  eq(other: TimelineHeaderWidget): boolean {
+    return this.dateLabel === other.dateLabel;
+  }
+
+  toDOM(): HTMLElement {
+    return renderTimelineHeaderDom(createTimelineHeaderModel(this.dateLabel));
   }
 }
 
@@ -350,6 +368,13 @@ function buildDecorationsFromState(state: EditorView["state"], settings: Tempora
 
   const builder = new RangeSetBuilder<Decoration>();
   const selection = state.selection;
+
+  const dateLabel = file instanceof TFile ? file.basename : "Today";
+  builder.add(
+    entries[0].from,
+    entries[0].from,
+    Decoration.widget({ widget: new TimelineHeaderWidget(dateLabel), block: true, side: -1 })
+  );
 
   for (const entry of entries) {
     // If selection is inside entry, keep raw markdown visible for editing.

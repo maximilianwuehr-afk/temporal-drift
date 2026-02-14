@@ -10,8 +10,12 @@ import { pathInFolder } from "../utils/folder-match";
 import { openWikiLinkFromCard } from "../utils/timeline-link-open";
 import type TemporalDriftPlugin from "../main";
 import { isTimelineLine, parseTimelineLine } from "../parsing/timeline";
-import { createTimelineCardModel, TimelineCardModel } from "../timeline/card-model";
-import { renderTimelineCardDom } from "../timeline/card-dom";
+import {
+  createTimelineCardModel,
+  createTimelineHeaderModel,
+  TimelineCardModel,
+} from "../timeline/card-model";
+import { renderTimelineCardDom, renderTimelineHeaderDom } from "../timeline/card-dom";
 
 type ParsedEntry = {
   lineStart: number; // 0-based line index
@@ -72,7 +76,12 @@ function openExternalUrl(app: TemporalDriftPlugin["app"], url: string): void {
   window.open(url);
 }
 
-function renderCardDom(app: TemporalDriftPlugin["app"], file: TFile, entry: ParsedEntry): HTMLElement {
+function renderCardDom(
+  app: TemporalDriftPlugin["app"],
+  file: TFile,
+  entry: ParsedEntry,
+  options: { withHeader?: boolean } = {}
+): HTMLElement {
   const openLine = () => {
     void openAndJumpToLine(app, file, entry.lineStart);
   };
@@ -98,7 +107,12 @@ function renderCardDom(app: TemporalDriftPlugin["app"], file: TFile, entry: Pars
     },
   });
 
-  return root;
+  if (!options.withHeader) return root;
+
+  const wrap = document.createElement("div");
+  wrap.appendChild(renderTimelineHeaderDom(createTimelineHeaderModel(file.basename)));
+  wrap.appendChild(root);
+  return wrap;
 }
 
 async function openAndJumpToLine(app: TemporalDriftPlugin["app"], file: TFile, line: number): Promise<void> {
@@ -148,6 +162,7 @@ export function registerTimelinePostProcessor(plugin: TemporalDriftPlugin): void
       if (cached.entries.length === 0) return;
 
       const ranges = cached.entries.map((e) => ({ start: e.lineStart, end: e.lineEnd }));
+      const firstLineStart = cached.entries[0]?.lineStart;
 
       const inAnyRange = (line: number): boolean => {
         for (const r of ranges) {
@@ -168,7 +183,9 @@ export function registerTimelinePostProcessor(plugin: TemporalDriftPlugin): void
 
         const entry = cached.byStart.get(info.lineStart);
         if (entry) {
-          const card = renderCardDom(plugin.app, af, entry);
+          const card = renderCardDom(plugin.app, af, entry, {
+            withHeader: info.lineStart === firstLineStart,
+          });
           child.replaceWith(card);
         } else {
           // Part of timeline entry body; remove duplicate rendered lines.

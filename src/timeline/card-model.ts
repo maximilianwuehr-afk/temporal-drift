@@ -31,6 +31,12 @@ export interface TimelineCardModel {
   durationText: string;
 }
 
+export interface TimelineHeaderModel {
+  leftLabel: string;
+  dateLabel: string;
+  rightLabel: string;
+}
+
 export interface TimelineCardModelInput {
   time: string;
   head: string;
@@ -96,6 +102,14 @@ export function contextIconForLine(line: string): string {
   if (lower.includes("last") || lower.includes("follow-up") || lower.includes("follow up")) return "↺";
   if (lower.includes("link") || lower.includes("doc") || lower.includes("thread")) return "↗";
   return "◆";
+}
+
+export function createTimelineHeaderModel(dateLabel: string, leftLabel = "Timeline", rightLabel = "Tasks"): TimelineHeaderModel {
+  return {
+    leftLabel,
+    dateLabel,
+    rightLabel,
+  };
 }
 
 export function createTimelineCardModel(input: TimelineCardModelInput): TimelineCardModel {

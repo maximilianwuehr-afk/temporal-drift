@@ -4,6 +4,7 @@ import {
   buildContextLines,
   contextIconForLine,
   createTimelineCardModel,
+  createTimelineHeaderModel,
   formatDuration,
   isTimelineCardNow,
 } from "../../src/timeline/card-model";
@@ -73,4 +74,11 @@ test("context line helpers filter join-link noise and classify icons", () => {
   assert.equal(contextIconForLine(lines[0]), "→");
   assert.equal(contextIconForLine(lines[1]), "↺");
   assert.equal(contextIconForLine(lines[2]), "↗");
+});
+
+test("createTimelineHeaderModel returns stable header labels", () => {
+  const header = createTimelineHeaderModel("2027-01-04");
+  assert.equal(header.leftLabel, "Timeline");
+  assert.equal(header.dateLabel, "2027-01-04");
+  assert.equal(header.rightLabel, "Tasks");
 });

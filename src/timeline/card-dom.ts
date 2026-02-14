@@ -2,6 +2,7 @@ import {
   contextIconForLine,
   TimelineCardModel,
   TimelineCardParticipant,
+  TimelineHeaderModel,
 } from "./card-model";
 
 const MAX_BODY_LINES = 8;
@@ -46,6 +47,33 @@ function addAction(el: HTMLElement, fn?: () => void): void {
     e.stopPropagation();
     fn();
   });
+}
+
+export function renderTimelineHeaderDom(model: TimelineHeaderModel): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "td-live-preview td-header";
+
+  const row = document.createElement("div");
+  row.className = "td-header-row";
+
+  const left = document.createElement("span");
+  left.className = "td-header-pill";
+  left.textContent = model.leftLabel;
+
+  const center = document.createElement("span");
+  center.className = "td-header-date";
+  center.textContent = model.dateLabel;
+
+  const right = document.createElement("span");
+  right.className = "td-header-pill";
+  right.textContent = model.rightLabel;
+
+  row.appendChild(left);
+  row.appendChild(center);
+  row.appendChild(right);
+  root.appendChild(row);
+
+  return root;
 }
 
 export function renderTimelineCardDom(

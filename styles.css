@@ -36,6 +36,40 @@
 }
 
 /* --------------------------------------------------------------------------
+   Header strip
+   -------------------------------------------------------------------------- */
+
+.td-live-preview.td-header {
+  margin: 0 0 8px 0;
+}
+
+.td-live-preview .td-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--td-text-muted);
+}
+
+.td-live-preview .td-header-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--td-border-light);
+  background: var(--td-surface);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.td-live-preview .td-header-date {
+  font-weight: 600;
+  color: var(--td-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
    Timeline row + gutter
    -------------------------------------------------------------------------- */
 
@@ -56,6 +90,7 @@
   font-variant-numeric: tabular-nums;
   user-select: none;
   white-space: nowrap;
+  cursor: text;
 }
 
 .td-live-preview .hour-time.is-now {
@@ -92,39 +127,30 @@
    -------------------------------------------------------------------------- */
 
 .td-live-preview .event {
-  padding: 10px;
-  margin: 0 -8px;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: all 0.12s ease;
+  padding: 2px 0;
+  margin: 0;
+  cursor: text;
+  border: 0;
+  border-radius: 0;
+  transition: none;
 }
 
 .td-live-preview .event:hover {
-  background: var(--td-accent-light);
-  border-color: var(--td-border-light);
+  background: transparent;
+  border-color: transparent;
 }
 
 .td-live-preview .event.active {
-  background: var(--td-bg-active);
-  border-color: var(--td-border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .td-live-preview .event:focus,
 .td-live-preview .event:focus-visible {
   outline: none;
-  border-color: var(--td-accent);
-  box-shadow: 0 0 0 1px var(--td-accent-soft);
-}
-
-.td-live-preview .event-group-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: var(--td-text-dim);
-  margin: 0 0 4px;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .td-live-preview .event-top {
@@ -142,6 +168,20 @@
   font-weight: 500;
   color: var(--td-text-primary);
   line-height: 1.35;
+}
+
+.td-live-preview .hour.now .event-title {
+  color: var(--td-accent);
+}
+
+.td-live-preview .event-title-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.td-live-preview .event-title-link:hover {
+  text-decoration: underline;
 }
 
 .td-live-preview .event-location {
@@ -209,7 +249,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .td-live-preview .participant {
@@ -266,7 +306,7 @@
    -------------------------------------------------------------------------- */
 
 .td-live-preview .event-context {
-  margin-top: 8px;
+  margin-top: 4px;
   padding: 6px 8px;
   background: var(--td-accent-soft);
   border-radius: 4px;
@@ -309,34 +349,61 @@
    Task bubbles
    -------------------------------------------------------------------------- */
 
-.td-live-preview .task-bubble {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.td-live-preview .task-checkbox {
+  -webkit-appearance: none;
+  appearance: none;
   width: 16px;
   height: 16px;
   border-radius: 4px;
   border: 1.5px solid var(--td-border-light);
-  background: var(--td-bg);
+  background: transparent;
   cursor: pointer;
-  margin-right: 2px;
-  transition: all 0.12s ease;
+  margin: 0 6px 0 0;
+  position: relative;
   flex-shrink: 0;
-  color: transparent;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 0;
+  transition: all 0.12s ease;
+  background-image: none !important;
+  box-shadow: none !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  text-indent: -9999px;
 }
 
-.td-live-preview .task-bubble:hover {
+.td-live-preview .task-checkbox::before {
+  content: none !important;
+  display: none !important;
+}
+
+.td-live-preview .task-checkbox::after {
+  content: none !important;
+}
+
+.td-live-preview .task-checkbox:hover {
   border-color: var(--td-accent);
   background: var(--td-accent-soft);
 }
 
-.td-live-preview .task-bubble.done {
-  border-color: var(--td-green);
-  background: rgba(26, 127, 55, 0.08);
-  color: var(--td-green);
+.td-live-preview .task-checkbox:focus-visible {
+  outline: 1px solid var(--td-accent);
+  outline-offset: 1px;
+}
+
+.td-live-preview .task-checkbox:checked {
+  border-color: var(--td-accent);
+  background: var(--td-accent-soft);
+}
+
+.td-live-preview .task-checkbox:checked::after {
+  content: "" !important;
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--td-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .td-live-preview .event--task .event-title {
@@ -431,6 +498,49 @@
 .cm-content .td-timestamp,
 .markdown-source-view .td-timestamp {
   color: var(--td-text-dim) !important;
+}
+
+/* Raw timeline line styling (when an entry is being edited) */
+.markdown-source-view.mod-cm6 .cm-line.td-line {
+  position: relative;
+}
+
+.markdown-source-view.mod-cm6 .cm-line.td-line .td-timestamp {
+  display: inline-block;
+  width: 52px;
+  margin-right: 14px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--td-text-dim) !important;
+}
+
+.markdown-source-view.mod-cm6 .cm-line.td-line::after {
+  content: "";
+  position: absolute;
+  left: 60px;
+  top: 0.2em;
+  bottom: 0.2em;
+  width: 1px;
+  background: var(--td-border-light);
+  pointer-events: none;
+}
+
+.markdown-source-view.mod-cm6 .cm-line.td-line.td-line--now .td-timestamp {
+  color: var(--td-accent) !important;
+  font-weight: 600;
+}
+
+.markdown-source-view.mod-cm6 .cm-line.td-line.td-line--now::before {
+  content: "";
+  position: absolute;
+  left: 57px;
+  top: 0.52em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--td-accent);
+  pointer-events: none;
 }
 
 .td-current-block {
