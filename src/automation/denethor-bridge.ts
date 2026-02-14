@@ -207,6 +207,12 @@ class DenethorBridgeImpl implements DenethorBridge {
     const frontmatter = cache?.frontmatter as Record<string, unknown> | undefined;
     if (!frontmatter) return null;
 
+    const flatStatus = frontmatter.denethor_status;
+    if (typeof flatStatus === "string" && flatStatus.trim().length > 0) {
+      return flatStatus.toLowerCase();
+    }
+
+    // Backward compatibility for legacy object format.
     const denethor = frontmatter.denethor;
     if (denethor && typeof denethor === "object") {
       const status = (denethor as Record<string, unknown>).status;
@@ -220,17 +226,12 @@ class DenethorBridgeImpl implements DenethorBridge {
     try {
       await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
         const root = frontmatter as Record<string, unknown>;
-        const denethorValue = root.denethor;
-        const denethor =
-          denethorValue && typeof denethorValue === "object"
-            ? (denethorValue as Record<string, unknown>)
-            : {};
+        root.denethor_status = "queued";
+        root.denethor_last_enqueued_at = new Date().toISOString();
+        root.denethor_last_trigger = trigger;
 
-        denethor.status = "queued";
-        denethor.last_enqueued_at = new Date().toISOString();
-        denethor.last_trigger = trigger;
-
-        root.denethor = denethor;
+        // Migrate away from legacy object so Obsidian properties stay readable.
+        delete root.denethor;
       });
     } catch {
       // Keep queue write successful even if frontmatter update fails.

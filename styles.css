@@ -17,6 +17,7 @@
   --td-green: #1a7f37;
   --td-yellow: #9a6700;
   --td-red: #cf222e;
+  --td-purple: #6f42c1;
   --td-bg: var(--td-bg-primary);
   --td-surface: var(--td-bg-secondary);
   --td-text: var(--td-text-primary);
@@ -106,7 +107,7 @@
 
 .td-live-preview .hour-slot {
   border-left: 1px solid var(--td-border-light);
-  padding: 10px 0 10px 14px;
+  padding: 8px 0 10px 14px;
   position: relative;
   min-width: 0;
 }
@@ -127,29 +128,31 @@
    -------------------------------------------------------------------------- */
 
 .td-live-preview .event {
-  padding: 2px 0;
-  margin: 0;
+  padding: 8px 10px;
+  margin: 0 0 2px 0;
   cursor: text;
-  border: 0;
-  border-radius: 0;
-  transition: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--td-bg-active);
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .td-live-preview .event:hover {
-  background: transparent;
-  border-color: transparent;
+  background: var(--td-accent-light);
+  border-color: var(--td-border-light);
 }
 
 .td-live-preview .event.active {
-  background: transparent;
-  border-color: transparent;
+  background: var(--td-accent-light);
+  border-color: var(--td-accent);
   box-shadow: none;
 }
 
 .td-live-preview .event:focus,
 .td-live-preview .event:focus-visible {
   outline: none;
-  border-color: transparent;
+  border-color: var(--td-accent);
+  background: var(--td-accent-light);
   box-shadow: none;
 }
 
@@ -168,6 +171,10 @@
   font-weight: 500;
   color: var(--td-text-primary);
   line-height: 1.35;
+}
+
+.td-live-preview .event:not(.event--task) .event-title {
+  color: var(--td-purple);
 }
 
 .td-live-preview .hour.now .event-title {
@@ -198,9 +205,13 @@
 }
 
 .td-live-preview .event-duration {
-  font-size: 11px;
-  color: var(--td-text-dim);
+  font-size: 10px;
+  color: var(--td-text-muted);
   font-variant-numeric: tabular-nums;
+  border: 1px solid var(--td-border-light);
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: var(--td-surface);
 }
 
 .td-live-preview .event-headline {

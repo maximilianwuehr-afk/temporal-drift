@@ -156,7 +156,7 @@ export function renderTimelineCardDom(
 
     headline.appendChild(title);
 
-    if (model.taskPriority) {
+    if (model.taskPriority && !model.taskDone) {
       const priority = document.createElement("span");
       priority.className = `task-priority task-priority-${model.taskPriority}`;
       priority.textContent = `#${model.taskPriority}`;
