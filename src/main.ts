@@ -14,6 +14,7 @@ import { registerCommands } from "./commands";
 import { formatDate, formatTime } from "./utils/time";
 import { registerTimelinePostProcessor } from "./preview/timeline-postprocessor";
 import { registerOpenTrigger } from "./automation/open-trigger";
+import { DenethorBridge, registerDenethorBridge } from "./automation/denethor-bridge";
 import { TaskDropExtension } from "./editor/task-drop";
 import { TemporalDriftTaskPoolView, VIEW_TYPE_TEMPORAL_DRIFT_TASK_POOL } from "./views/task-pool-view";
 import { TaskAllocationSync } from "./services/task-allocation-sync";
@@ -38,6 +39,7 @@ export default class TemporalDriftPlugin extends Plugin {
   private googleTasksSync: GoogleTasksSyncService | null = null;
   private calendarService: CalendarService | null = null;
   private calendarEventSync: CalendarEventSyncService | null = null;
+  private denethorBridge: DenethorBridge | null = null;
   private googleTasksIntervalId: number | null = null;
   private calendarSyncIntervalId: number | null = null;
   private googleTasksSyncStatus: GoogleTasksSyncStatus = {
@@ -89,6 +91,7 @@ export default class TemporalDriftPlugin extends Plugin {
 
     // External automation trigger file (vault-relative)
     registerOpenTrigger(this.app, { controlPath: "Temporal Drift/open.txt" });
+    this.denethorBridge = registerDenethorBridge(this);
 
     this.registerView(VIEW_TYPE_TEMPORAL_DRIFT_TASK_POOL, (leaf) =>
       new TemporalDriftTaskPoolView(leaf, this)
@@ -107,7 +110,14 @@ export default class TemporalDriftPlugin extends Plugin {
       this.googleTasksSync?.onVaultEvent(file);
     };
 
-    this.registerEvent(this.app.vault.on("create", onTaskFileEvent));
+    this.registerEvent(
+      this.app.vault.on("create", async (file) => {
+        await onTaskFileEvent(file);
+        if (file instanceof TFile) {
+          await this.denethorBridge?.onFileCreate(file);
+        }
+      })
+    );
     this.registerEvent(this.app.vault.on("modify", onTaskFileEvent));
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
@@ -182,6 +192,7 @@ export default class TemporalDriftPlugin extends Plugin {
         if (key === "tasksFolder") this.settings.tasksFolder = fallback;
         if (key === "meetingsFolder") this.settings.meetingsFolder = fallback;
         if (key === "peopleFolder") this.settings.peopleFolder = fallback;
+        if (key === "organizationsFolder") this.settings.organizationsFolder = fallback;
         changed = true;
       }
     };
@@ -190,6 +201,7 @@ export default class TemporalDriftPlugin extends Plugin {
     reconcile("tasksFolder", "Tasks");
     reconcile("meetingsFolder", "Meetings");
     reconcile("peopleFolder", "People");
+    reconcile("organizationsFolder", "Organizations");
 
     if (changed) {
       await this.saveSettingsDataOnly();
@@ -277,6 +289,10 @@ export default class TemporalDriftPlugin extends Plugin {
     }
   }
 
+  async enqueueDenethorResearchForFile(file: TFile, trigger = "manual", force = false): Promise<boolean> {
+    return (await this.denethorBridge?.enqueueForFile(file, trigger, force)) ?? false;
+  }
+
   async previewCalendarDateSync(date: string): Promise<string> {
     if (!this.calendarEventSync) return "Calendar sync service unavailable.";
 
@@ -343,6 +359,7 @@ export default class TemporalDriftPlugin extends Plugin {
     this.googleTasksSync?.updateSettings(this.settings);
     this.calendarService?.updateSettings(this.settings);
     this.calendarEventSync?.updateSettings(this.settings);
+    await this.denethorBridge?.refresh();
 
     this.setupGoogleTasksAutoSync();
     this.setupCalendarAutoSync();

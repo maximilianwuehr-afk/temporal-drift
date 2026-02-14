@@ -82,6 +82,19 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
           })
       );
 
+    new Setting(containerEl)
+      .setName("Organizations folder")
+      .setDesc("Folder where organization notes are stored")
+      .addText((text) =>
+        text
+          .setPlaceholder("Organizations")
+          .setValue(this.plugin.settings.organizationsFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.organizationsFolder = value || "Organizations";
+            await this.plugin.saveSettings();
+          })
+      );
+
     // Display section
     new Setting(containerEl).setName("Display").setHeading();
 
@@ -257,6 +270,75 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.googleTasksEnabled).onChange(async (value) => {
           this.plugin.settings.googleTasksEnabled = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    // Automation section
+    new Setting(containerEl).setName("Automation").setHeading();
+
+    new Setting(containerEl)
+      .setName("Enable OpenClaw automation")
+      .setDesc("Allow command ingestion and Denethor queue writes.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.openClawAutomationEnabled).onChange(async (value) => {
+          this.plugin.settings.openClawAutomationEnabled = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("OpenClaw commands path")
+      .setDesc("NDJSON inbox watched for automation commands.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Temporal Drift/commands.ndjson")
+          .setValue(this.plugin.settings.openClawCommandsPath)
+          .onChange(async (value) => {
+            this.plugin.settings.openClawCommandsPath = value || "Temporal Drift/commands.ndjson";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Denethor queue path")
+      .setDesc("NDJSON outbox where research jobs are appended.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Temporal Drift/denethor-queue.ndjson")
+          .setValue(this.plugin.settings.denethorQueuePath)
+          .onChange(async (value) => {
+            this.plugin.settings.denethorQueuePath = value || "Temporal Drift/denethor-queue.ndjson";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-research daily notes")
+      .setDesc("Queue Denethor research when a new daily note is created.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.denethorAutoResearchDailyNotes).onChange(async (value) => {
+          this.plugin.settings.denethorAutoResearchDailyNotes = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-research people notes")
+      .setDesc("Queue Denethor research when a new People note is created.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.denethorAutoResearchPeople).onChange(async (value) => {
+          this.plugin.settings.denethorAutoResearchPeople = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-research organization notes")
+      .setDesc("Queue Denethor research when a new organization note is created.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.denethorAutoResearchOrganizations).onChange(async (value) => {
+          this.plugin.settings.denethorAutoResearchOrganizations = value;
           await this.plugin.saveSettings();
         })
       );

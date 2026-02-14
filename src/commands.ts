@@ -486,6 +486,30 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     },
   });
 
+  plugin.addCommand({
+    id: "denethor-rerun-current-note",
+    name: "Denethor: Re-run research for current note",
+    callback: async () => {
+      const activeFile = plugin.app.workspace.getActiveFile();
+      if (!(activeFile instanceof TFile) || activeFile.extension !== "md") {
+        new Notice("[Temporal Drift] Active file is not a note.", 3500);
+        return;
+      }
+
+      const enqueued = await (plugin as any).enqueueDenethorResearchForFile?.(
+        activeFile,
+        "manual:command",
+        true
+      );
+
+      if (enqueued) {
+        new Notice(`[Temporal Drift] Enqueued Denethor research: ${activeFile.path}`, 4000);
+      } else {
+        new Notice("[Temporal Drift] Denethor queue is disabled or unavailable.", 4000);
+      }
+    },
+  });
+
   // Quick capture to today's note
   plugin.addCommand({
     id: "quick-capture",

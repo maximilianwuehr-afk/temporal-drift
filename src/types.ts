@@ -39,6 +39,7 @@ export interface TemporalDriftSettings {
   tasksFolder: string;
   meetingsFolder: string;
   peopleFolder: string;
+  organizationsFolder: string;
   defaultPriority: "now" | "next" | "later";
   themeMode: "light" | "dark" | "system";
   showThankful: boolean;
@@ -62,6 +63,14 @@ export interface TemporalDriftSettings {
   googleTasksToken: GoogleTasksToken | null;
   googleTasksListId: string; // empty => use first list
   googleTasksAutoSyncMinutes: number; // 0 => manual only
+
+  // OpenClaw / Denethor automation (optional)
+  openClawAutomationEnabled: boolean;
+  openClawCommandsPath: string; // NDJSON command inbox
+  denethorQueuePath: string; // NDJSON queue for research jobs
+  denethorAutoResearchDailyNotes: boolean;
+  denethorAutoResearchPeople: boolean;
+  denethorAutoResearchOrganizations: boolean;
 }
 
 export const DEFAULT_SETTINGS: TemporalDriftSettings = {
@@ -69,6 +78,7 @@ export const DEFAULT_SETTINGS: TemporalDriftSettings = {
   tasksFolder: "Tasks",
   meetingsFolder: "Meetings",
   peopleFolder: "People",
+  organizationsFolder: "Organizations",
   defaultPriority: "now",
   themeMode: "system",
   showThankful: true,
@@ -89,6 +99,13 @@ export const DEFAULT_SETTINGS: TemporalDriftSettings = {
   googleTasksToken: null,
   googleTasksListId: "",
   googleTasksAutoSyncMinutes: 5,
+
+  openClawAutomationEnabled: true,
+  openClawCommandsPath: "Temporal Drift/commands.ndjson",
+  denethorQueuePath: "Temporal Drift/denethor-queue.ndjson",
+  denethorAutoResearchDailyNotes: true,
+  denethorAutoResearchPeople: true,
+  denethorAutoResearchOrganizations: true,
 };
 
 // ============================================================================
