@@ -10,112 +10,31 @@ import { Extension, RangeSetBuilder, StateField } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import { TFile, editorInfoField, editorLivePreviewField, normalizePath } from "obsidian";
 import { TemporalDriftSettings } from "../types";
-import {
-  extractMeetingJoinUrl,
-  extractParticipants,
-  extractPrimaryLink,
-  isTimelineLine,
-  parseTaskHead,
-  parseTimelineLine,
-  stripEventIdSuffix,
-  stripWikilinks,
-} from "../parsing/timeline";
+import { isTimelineLine, parseTimelineLine } from "../parsing/timeline";
 import { formatTime } from "../utils/time";
 import { pathInFolder } from "../utils/folder-match";
 import { openWikiLinkFromCard } from "../utils/timeline-link-open";
-
-const MAX_BODY_LINES = 8;
-const MAX_VISIBLE_PARTICIPANTS = 3;
-
-type Participant = { target: string; display: string };
+import { createTimelineCardModel, TimelineCardModel } from "../timeline/card-model";
+import { renderTimelineCardDom } from "../timeline/card-dom";
 
 type TimelineEntry = {
   from: number; // doc offset start of block
   to: number; // doc offset end of block
   lineFrom: number; // doc offset start of the timestamp line
+  timeFrom: number; // doc offset start of the visible time token
+  timeTo: number; // doc offset end of the visible time token
   editPos: number; // doc offset for editing (head start)
-  time: string; // HH:mm or HH:mm–HH:mm
-  title: string;
-  locationText: string;
-  participants: Participant[];
-  bodyLines: string[];
-  joinUrl: string | null;
-  primaryLinkTarget: string | null;
   raw: string;
-  kind: "event" | "task" | "note";
-  taskDone: boolean;
-  taskPriority: "now" | "next" | "later" | null;
-  groupLabel: string | null;
-  taskLinkPath: string | null;
+  model: TimelineCardModel;
 };
 
-function getInitials(name: string): string {
-  const cleaned = name.replace(/\[\[|\]\]/g, "").trim();
-  const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-function parseTimeWindow(timeText: string): { start: number; end: number | null } | null {
-  const start = timeText.match(/^(\d{2}):(\d{2})/);
-  if (!start) return null;
-
-  const startMinutes = Number(start[1]) * 60 + Number(start[2]);
-  const end = timeText.match(/[–-](\d{2}):(\d{2})/);
-  if (!end) return { start: startMinutes, end: null };
-
-  return {
-    start: startMinutes,
-    end: Number(end[1]) * 60 + Number(end[2]),
-  };
-}
-
-function formatDuration(timeText: string): string {
-  const window = parseTimeWindow(timeText);
-  if (!window || window.end === null) return "";
-
-  const minutes = window.end - window.start;
-  if (minutes <= 0) return "";
-
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
-  if (hours > 0) return `${hours}h`;
-  return `${mins}m`;
-}
-
-function isEntryNow(timeText: string, now = new Date()): boolean {
-  const window = parseTimeWindow(timeText);
-  if (!window) return false;
-
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  if (window.end !== null) {
-    return currentMinutes >= window.start && currentMinutes <= window.end;
-  }
-
-  return currentMinutes >= window.start && currentMinutes < window.start + 60;
-}
-
-function buildContextLines(bodyLines: string[], joinUrl: string | null): string[] {
-  const out: string[] = [];
-
-  for (const line of bodyLines) {
-    const cleaned = stripWikilinks(line.trim().replace(/^[-*+]\s+/, "").trim());
-    if (!cleaned) continue;
-    if (joinUrl && (cleaned.includes(joinUrl) || /^meeting link\s*:/i.test(cleaned))) continue;
-    out.push(cleaned);
-  }
-
-  return out;
-}
-
-function contextIconForLine(line: string): string {
-  const lower = line.toLowerCase();
-  if (lower.includes("agenda") || lower.includes("next") || lower.includes("todo")) return "→";
-  if (lower.includes("last") || lower.includes("follow-up") || lower.includes("follow up")) return "↺";
-  if (lower.includes("link") || lower.includes("doc") || lower.includes("thread")) return "↗";
-  return "◆";
+function findTimeRangeInLine(text: string): { start: number; end: number } | null {
+  const m = text.match(/`?(\d{1,2}[:.]\d{2}(?:\s*[–-]\s*\d{1,2}[:.]\d{2})?)`?/);
+  if (!m) return null;
+  const token = m[1];
+  const matchText = m[0];
+  const from = (m.index ?? 0) + matchText.indexOf(token);
+  return { start: from, end: from + token.length };
 }
 
 function focusAdjacentCard(current: HTMLElement, direction: 1 | -1): void {
@@ -222,13 +141,33 @@ class TimelineCardWidget extends WidgetType {
     view.focus();
   }
 
+  private enterEditTime(view: EditorView): void {
+    view.dispatch({
+      selection: { anchor: this.entry.timeFrom, head: this.entry.timeTo },
+    });
+    view.focus();
+  }
+
+  private openPrimaryLink(view: EditorView): void {
+    if (!this.entry.model.primaryLinkTarget) return;
+
+    const app = (window as unknown as { app?: unknown }).app;
+    const sourcePath = view.state.field(editorInfoField, false)?.file?.path ?? "";
+
+    void openWikiLinkFromCard(app as any, this.entry.model.primaryLinkTarget, sourcePath).then((opened) => {
+      if (opened) return;
+      this.enterEdit(view);
+    });
+  }
+
   private syncLinkedTaskStatus(done: boolean): void {
-    if (!this.entry.taskLinkPath) return;
+    const taskLinkPath = this.entry.model.taskLinkPath;
+    if (!taskLinkPath) return;
 
     const app = (window as unknown as { app?: any }).app;
     if (!app?.vault) return;
 
-    const path = normalizePath(this.entry.taskLinkPath);
+    const path = normalizePath(taskLinkPath);
     const af = app.vault.getAbstractFileByPath(path);
     if (!(af instanceof TFile)) return;
 
@@ -242,7 +181,7 @@ class TimelineCardWidget extends WidgetType {
   }
 
   private toggleTask(view: EditorView): void {
-    if (this.entry.kind !== "task") return;
+    if (this.entry.model.kind !== "task") return;
 
     const line = view.state.doc.lineAt(this.entry.lineFrom);
     const parsed = parseTimelineLine(line.text);
@@ -268,261 +207,42 @@ class TimelineCardWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const root = document.createElement("div");
-    root.className = "td-live-preview";
-
-    const hour = document.createElement("div");
-    hour.className = "hour";
-
-    const timeEl = document.createElement("div");
-    timeEl.className = "hour-time";
-
-    const entryIsNow = isEntryNow(this.entry.time);
-    if (entryIsNow) {
-      hour.classList.add("now");
-      timeEl.classList.add("is-now");
-      const dot = document.createElement("span");
-      dot.className = "now-dot";
-      dot.textContent = "●";
-      timeEl.appendChild(dot);
-    }
-
-    timeEl.appendChild(document.createTextNode(this.entry.time));
-
-    const slot = document.createElement("div");
-    slot.className = "hour-slot";
-
-    if (this.entry.groupLabel) {
-      const groupLabel = document.createElement("div");
-      groupLabel.className = "event-group-label";
-      groupLabel.textContent = this.entry.groupLabel;
-      slot.appendChild(groupLabel);
-    }
-
-    const card = document.createElement("div");
-    card.className = "event";
-    if (entryIsNow) card.classList.add("active");
-    if (this.entry.kind === "task") card.classList.add("event--task");
-    if (this.entry.kind === "task" && this.entry.taskDone) card.classList.add("event--task-done");
-    card.tabIndex = 0;
-    card.setAttribute("role", "button");
-    card.setAttribute("aria-label", `Timeline entry ${this.entry.time}`);
-
-    if (this.entry.kind === "task") {
-      const headline = document.createElement("div");
-      headline.className = "event-headline";
-
-      const bubble = document.createElement("button");
-      bubble.type = "button";
-      bubble.className = `task-bubble${this.entry.taskDone ? " done" : ""}`;
-      bubble.setAttribute("aria-label", this.entry.taskDone ? "Mark task as open" : "Mark task as done");
-      if (this.entry.taskDone) bubble.textContent = "✓";
-      bubble.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.toggleTask(view);
-      });
-      headline.appendChild(bubble);
-
-      const title = document.createElement("span");
-      title.className = "event-title";
-      if (this.entry.taskDone) title.classList.add("task-title-done");
-      title.textContent = this.entry.title;
-      headline.appendChild(title);
-
-      if (this.entry.taskPriority) {
-        const priority = document.createElement("span");
-        priority.className = `task-priority task-priority-${this.entry.taskPriority}`;
-        priority.textContent = `#${this.entry.taskPriority}`;
-        headline.appendChild(priority);
-      }
-
-      card.appendChild(headline);
-    } else {
-      const top = document.createElement("div");
-      top.className = "event-top";
-
-      const left = document.createElement("div");
-      left.className = "event-main";
-
-      const title = document.createElement("div");
-      title.className = "event-title";
-      title.textContent = this.entry.title;
-      left.appendChild(title);
-
-      if (this.entry.locationText) {
-        const location = document.createElement("div");
-        location.className = "event-location";
-        location.textContent = this.entry.locationText;
-        left.appendChild(location);
-      }
-
-      const right = document.createElement("div");
-      right.className = "event-right";
-
-      const durationText = formatDuration(this.entry.time);
-      if (durationText) {
-        const duration = document.createElement("span");
-        duration.className = "event-duration";
-        duration.textContent = durationText;
-        right.appendChild(duration);
-      }
-
-      const joinUrl = this.entry.joinUrl;
-      if (joinUrl) {
-        const join = document.createElement("a");
-        join.className = "join-pill";
-        join.href = "#";
-        join.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>Join`;
-        join.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          openExternalUrl(joinUrl);
-        });
-        right.appendChild(join);
-      }
-
-      top.appendChild(left);
-      top.appendChild(right);
-      card.appendChild(top);
-    }
-
-    if (this.entry.participants.length > 0) {
-      const peopleRow = document.createElement("div");
-      peopleRow.className = "event-participants";
-
-      const visibleParticipants = this.entry.participants.slice(0, MAX_VISIBLE_PARTICIPANTS);
-      for (const p of visibleParticipants) {
-        const person = document.createElement("a");
-        person.className = "participant";
-        person.href = "#";
-        person.setAttribute("role", "button");
-        person.setAttribute("aria-label", `Open ${p.display}`);
-
-        const avatar = document.createElement("span");
-        avatar.className = "participant-avatar";
-        avatar.textContent = getInitials(p.display);
-        person.appendChild(avatar);
-
-        const label = document.createElement("span");
-        label.className = "participant-label";
-        label.textContent = p.display;
-        person.appendChild(label);
-
-        person.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-
+    const { root, cardEl } = renderTimelineCardDom(this.entry.model, {
+      entryAriaLabel: `Timeline entry ${this.entry.model.time}`,
+      actions: {
+        onTimeClick: () => this.enterEditTime(view),
+        onCardClick: () => this.enterEdit(view),
+        onCardDoubleClick: () => this.enterEdit(view),
+        onPrimaryClick: () => this.openPrimaryLink(view),
+        onParticipantClick: (participant) => {
           const app = (window as unknown as { app?: unknown }).app;
           const sourcePath = view.state.field(editorInfoField, false)?.file?.path ?? "";
 
-          void openWikiLinkFromCard(app as any, p.target, sourcePath).then((opened) => {
+          void openWikiLinkFromCard(app as any, participant.target, sourcePath).then((opened) => {
             if (opened) return;
             view.dispatch({ selection: { anchor: this.entry.lineFrom } });
             view.focus();
           });
-        });
-
-        peopleRow.appendChild(person);
-      }
-
-      const overflow = this.entry.participants.length - visibleParticipants.length;
-      if (overflow > 0) {
-        const more = document.createElement("span");
-        more.className = "participant participant-more";
-
-        const av = document.createElement("span");
-        av.className = "participant-avatar";
-        av.textContent = `+${overflow}`;
-        more.appendChild(av);
-
-        const text = document.createElement("span");
-        text.className = "participant-label";
-        text.textContent = `${overflow} attendees`;
-        more.appendChild(text);
-
-        peopleRow.appendChild(more);
-      }
-
-      card.appendChild(peopleRow);
-    }
-
-    const contextLines = buildContextLines(this.entry.bodyLines, this.entry.joinUrl);
-    if (contextLines.length > 0) {
-      const context = document.createElement("div");
-      context.className = "event-context";
-
-      const visible = contextLines.slice(0, MAX_BODY_LINES);
-      for (const line of visible) {
-        const contextLine = document.createElement("div");
-        contextLine.className = "context-line";
-
-        const icon = document.createElement("span");
-        icon.className = "context-icon";
-        icon.textContent = contextIconForLine(line);
-        contextLine.appendChild(icon);
-
-        const text = document.createElement("span");
-        text.className = "context-text";
-        text.textContent = line;
-        contextLine.appendChild(text);
-
-        context.appendChild(contextLine);
-      }
-
-      const overflow = contextLines.length - visible.length;
-      if (overflow > 0) {
-        const moreLine = document.createElement("div");
-        moreLine.className = "context-line context-line-more";
-
-        const icon = document.createElement("span");
-        icon.className = "context-icon";
-        icon.textContent = "…";
-        moreLine.appendChild(icon);
-
-        const text = document.createElement("span");
-        text.className = "context-text";
-        text.textContent = `${overflow} more note${overflow === 1 ? "" : "s"}`;
-        moreLine.appendChild(text);
-
-        context.appendChild(moreLine);
-      }
-
-      card.appendChild(context);
-    }
-
-    card.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      const app = (window as unknown as { app?: unknown }).app;
-      const sourcePath = view.state.field(editorInfoField, false)?.file?.path ?? "";
-
-      void openWikiLinkFromCard(app as any, this.entry.primaryLinkTarget ?? "", sourcePath).then((opened) => {
-        if (!opened) card.focus();
-      });
+        },
+        onJoinClick: (url) => openExternalUrl(url),
+        onTaskToggle: this.entry.model.kind === "task" ? () => this.toggleTask(view) : undefined,
+      },
     });
 
-    card.addEventListener("dblclick", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.enterEdit(view);
-    });
-
-    card.addEventListener("keydown", (e) => {
+    cardEl.addEventListener("keydown", (e) => {
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
-        focusAdjacentCard(card, 1);
+        focusAdjacentCard(cardEl, 1);
         return;
       }
 
       if (e.key === "k" || e.key === "ArrowUp") {
         e.preventDefault();
-        focusAdjacentCard(card, -1);
+        focusAdjacentCard(cardEl, -1);
         return;
       }
 
-      if (this.entry.kind === "task" && (e.key === "x" || e.key === "X" || e.key === " ")) {
+      if (this.entry.model.kind === "task" && (e.key === "x" || e.key === "X" || e.key === " ")) {
         e.preventDefault();
         this.toggleTask(view);
         return;
@@ -533,11 +253,6 @@ class TimelineCardWidget extends WidgetType {
         this.enterEdit(view);
       }
     });
-
-    slot.appendChild(card);
-    hour.appendChild(timeEl);
-    hour.appendChild(slot);
-    root.appendChild(hour);
 
     return root;
   }
@@ -581,73 +296,24 @@ function buildEntriesFromDoc(doc: EditorView["state"]["doc"]): TimelineEntry[] {
     }
 
     const endLine = doc.line(endLineNo);
+    const model = createTimelineCardModel({ time, head, bodyLines });
 
-    const task = parseTaskHead(head);
-    const primary = extractPrimaryLink(head);
-    const participants = task.isTask ? [] : extractParticipants(head);
-
-    const taskLinkPath = (() => {
-      if (!task.isTask) return null;
-      const m = head.match(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/);
-      return m?.[1]?.trim() || null;
-    })();
-
-    const kind: "event" | "task" | "note" = task.isTask ? "task" : primary ? "event" : "note";
-
-    const joinUrl = kind === "event" ? extractMeetingJoinUrl([head, ...bodyLines]) : null;
-
-    const title = (() => {
-      if (task.isTask) {
-        return stripWikilinks(task.title || "(empty task)");
-      }
-      if (primary) return stripEventIdSuffix(primary.display);
-      const plain = head.split(" with ")[0];
-      return stripEventIdSuffix(stripWikilinks(plain || "(empty)"));
-    })();
-
-    const locationText = (() => {
-      if (!primary || task.isTask) return "";
-      let t = head;
-      t = t.replace(/^\s*\[\[[^\]]+\]\]\s*/, "");
-      if (/^with\s/i.test(t)) return "";
-      const withIdx = t.search(/\swith\s/i);
-      if (withIdx >= 0) t = t.slice(0, withIdx);
-      return stripWikilinks(t).trim();
-    })();
-
-    const raw = rawLines.join("\n");
+    const timeRange = findTimeRangeInLine(line.text);
+    const timeFrom = timeRange ? line.from + timeRange.start : line.from;
+    const timeTo = timeRange ? line.from + timeRange.end : line.from + parsed.timeText.length;
 
     entries.push({
       from: line.from,
       to: endLine.to,
       lineFrom: line.from,
+      timeFrom,
+      timeTo,
       editPos,
-      time,
-      title,
-      locationText,
-      participants,
-      bodyLines,
-      joinUrl,
-      primaryLinkTarget: primary?.target ?? null,
-      raw,
-      kind,
-      taskDone: task.done,
-      taskPriority: task.priority,
-      groupLabel: null,
-      taskLinkPath,
+      raw: rawLines.join("\n"),
+      model,
     });
 
     lineNo = endLineNo;
-  }
-
-  let lastTaskState: boolean | null = null;
-  for (const entry of entries) {
-    if (entry.kind !== "task") continue;
-
-    if (lastTaskState === null || lastTaskState !== entry.taskDone) {
-      entry.groupLabel = entry.taskDone ? "Done tasks" : "Open tasks";
-      lastTaskState = entry.taskDone;
-    }
   }
 
   return entries;
