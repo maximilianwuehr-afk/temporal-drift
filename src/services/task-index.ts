@@ -81,13 +81,18 @@ export class TaskIndexService implements SettingsAware {
     const fm = cache.frontmatter;
     if (!fm) return;
 
+    const statusKey = this.settings.taskFieldStatus || "status";
+    const priorityKey = this.settings.taskFieldPriority || "priority";
+    const dueKey = this.settings.taskFieldDue || "due";
+    const createdKey = this.settings.taskFieldCreated || "created";
+
     const meta: TaskMeta = {
       path: file.path,
       title: file.basename,
-      status: fm.status || "open",
-      priority: fm.priority || this.settings.defaultPriority,
-      due: fm.due,
-      created: fm.created,
+      status: (fm as any)[statusKey] || "open",
+      priority: (fm as any)[priorityKey] || this.settings.defaultPriority,
+      due: (fm as any)[dueKey],
+      created: (fm as any)[createdKey],
     };
 
     this.metadata.set(file.path, meta);
@@ -206,9 +211,12 @@ export class TaskIndexService implements SettingsAware {
       const file = this.app.vault.getAbstractFileByPath(path);
       if (!(file instanceof TFile)) return;
 
-      await this.app.vault.process(file, (content) => {
-        // Update status in frontmatter
-        return content.replace(/^(---\n[\s\S]*?status:\s*)\w+/m, `$1${newStatus}`);
+      const statusKey = this.settings.taskFieldStatus || "status";
+      const doneKey = this.settings.taskFieldDone || "done";
+
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        (frontmatter as any)[statusKey] = newStatus;
+        (frontmatter as any)[doneKey] = newStatus === "done";
       });
     });
   }
@@ -221,14 +229,10 @@ export class TaskIndexService implements SettingsAware {
       const file = this.app.vault.getAbstractFileByPath(path);
       if (!(file instanceof TFile)) return;
 
-      await this.app.vault.process(file, (content) => {
-        // Update priority in frontmatter
-        if (content.match(/^(---\n[\s\S]*?priority:\s*)\w+/m)) {
-          return content.replace(/^(---\n[\s\S]*?priority:\s*)\w+/m, `$1${newPriority}`);
-        } else {
-          // Add priority if not present
-          return content.replace(/^(---\n)/, `$1priority: ${newPriority}\n`);
-        }
+      const priorityKey = this.settings.taskFieldPriority || "priority";
+
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        (frontmatter as any)[priorityKey] = newPriority;
       });
     });
   }
@@ -240,10 +244,18 @@ export class TaskIndexService implements SettingsAware {
     const safeName = title.replace(/[\\/:*?"<>|]/g, "-");
     const path = `${this.settings.tasksFolder}/${safeName}.md`;
 
+    const statusKey = this.settings.taskFieldStatus || "status";
+    const doneKey = this.settings.taskFieldDone || "done";
+    const priorityKey = this.settings.taskFieldPriority || "priority";
+    const createdKey = this.settings.taskFieldCreated || "created";
+
+    const created = new Date().toISOString().split("T")[0];
+
     const content = `---
-status: open
-priority: ${priority || this.settings.defaultPriority}
-created: ${new Date().toISOString().split("T")[0]}
+${statusKey}: open
+${doneKey}: false
+${priorityKey}: ${priority || this.settings.defaultPriority}
+${createdKey}: ${created}
 ---
 
 # ${title}

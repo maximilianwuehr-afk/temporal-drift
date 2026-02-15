@@ -93,6 +93,11 @@ export class GoogleTasksSyncService {
     this.localReconciliation = new LocalTaskReconciliation({
       app: this.app,
       getTasksFolder: () => this.settings.tasksFolder,
+      getTaskFieldKeys: () => ({
+        statusKey: this.settings.taskFieldStatus || "status",
+        doneKey: this.settings.taskFieldDone || "done",
+        priorityKey: this.settings.taskFieldPriority || "priority",
+      }),
       getFrontmatter: this.getFrontmatter.bind(this),
       getLocalTaskMeta: this.getLocalTaskMeta.bind(this),
       computeSyncStamp: this.computeSyncStamp.bind(this),
@@ -230,19 +235,31 @@ export class GoogleTasksSyncService {
 
   private getLocalTaskMeta(file: TFile): TaskMeta {
     const fm = this.getFrontmatter(file);
-    const status = (typeof fm.status === "string" ? fm.status : "open") as "open" | "done";
-    const priority = (typeof fm.priority === "string" ? fm.priority : this.settings.defaultPriority) as
+
+    const statusKey = this.settings.taskFieldStatus || "status";
+    const priorityKey = this.settings.taskFieldPriority || "priority";
+    const dueKey = this.settings.taskFieldDue || "due";
+    const createdKey = this.settings.taskFieldCreated || "created";
+
+    const statusRaw = (fm as any)[statusKey];
+    const priorityRaw = (fm as any)[priorityKey];
+
+    const status = (typeof statusRaw === "string" ? statusRaw : "open") as "open" | "done";
+    const priority = (typeof priorityRaw === "string" ? priorityRaw : this.settings.defaultPriority) as
       | "now"
       | "next"
       | "later";
+
+    const dueRaw = (fm as any)[dueKey];
+    const createdRaw = (fm as any)[createdKey];
 
     return {
       path: file.path,
       title: file.basename,
       status,
       priority,
-      due: typeof fm.due === "string" ? fm.due : undefined,
-      created: typeof fm.created === "string" ? fm.created : undefined,
+      due: typeof dueRaw === "string" ? dueRaw : undefined,
+      created: typeof createdRaw === "string" ? createdRaw : undefined,
       googleTaskId: typeof fm.google_task_id === "string" ? fm.google_task_id : undefined,
       googleEtag: typeof fm.google_etag === "string" ? fm.google_etag : undefined,
       googleLastSynced: typeof fm.google_last_synced === "number" ? fm.google_last_synced : undefined,
@@ -262,8 +279,11 @@ export class GoogleTasksSyncService {
     const currentEtag = typeof current.google_etag === "string" ? current.google_etag : "";
     const currentLastSynced = typeof current.google_last_synced === "number" ? current.google_last_synced : 0;
 
-    const doneFromStatus = typeof current.status === "string" ? String(current.status).toLowerCase() === "done" : undefined;
-    const doneNeedsWrite = typeof current.done !== "boolean" && typeof doneFromStatus === "boolean";
+    const statusKey = this.settings.taskFieldStatus || "status";
+    const doneKey = this.settings.taskFieldDone || "done";
+
+    const doneFromStatus = typeof (current as any)[statusKey] === "string" ? String((current as any)[statusKey]).toLowerCase() === "done" : undefined;
+    const doneNeedsWrite = typeof (current as any)[doneKey] !== "boolean" && typeof doneFromStatus === "boolean";
 
     const idChanged = currentId !== meta.id;
     const etagChanged = currentEtag !== meta.etag;
@@ -278,9 +298,11 @@ export class GoogleTasksSyncService {
       (fm as any).google_etag = meta.etag;
       (fm as any).google_last_synced = meta.lastSynced;
 
-      // also keep canonical booleans consistent
-      if (typeof (fm as any).done !== "boolean" && typeof (fm as any).status === "string") {
-        (fm as any).done = String((fm as any).status).toLowerCase() === "done";
+      // also keep done boolean consistent with status
+      const statusKey = this.settings.taskFieldStatus || "status";
+      const doneKey = this.settings.taskFieldDone || "done";
+      if (typeof (fm as any)[doneKey] !== "boolean" && typeof (fm as any)[statusKey] === "string") {
+        (fm as any)[doneKey] = String((fm as any)[statusKey]).toLowerCase() === "done";
       }
     });
   }
@@ -326,21 +348,25 @@ export class GoogleTasksSyncService {
     }
 
     // Update frontmatter only when it actually changes.
+    const statusKey = this.settings.taskFieldStatus || "status";
+    const doneKey = this.settings.taskFieldDone || "done";
+    const priorityKey = this.settings.taskFieldPriority || "priority";
+
     const fm = this.getFrontmatter(file);
     const nextStatus = canonicalStatus(done);
     const nextDone = done;
     const nextPriority = decoded.priority;
 
     const needsFrontmatterUpdate =
-      String(fm.status ?? "") !== nextStatus ||
-      Boolean(fm.done ?? false) !== nextDone ||
-      String(fm.priority ?? "") !== nextPriority;
+      String((fm as any)[statusKey] ?? "") !== nextStatus ||
+      Boolean((fm as any)[doneKey] ?? false) !== nextDone ||
+      String((fm as any)[priorityKey] ?? "") !== nextPriority;
 
     if (needsFrontmatterUpdate) {
       await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-        frontmatter.status = nextStatus;
-        (frontmatter as any).done = nextDone;
-        frontmatter.priority = nextPriority;
+        (frontmatter as any)[statusKey] = nextStatus;
+        (frontmatter as any)[doneKey] = nextDone;
+        (frontmatter as any)[priorityKey] = nextPriority;
       });
     }
 

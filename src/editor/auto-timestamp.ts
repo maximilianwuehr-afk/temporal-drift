@@ -64,10 +64,8 @@ export function createAutoTimestampExtension(settings: TemporalDriftSettings): E
           return false;
         }
 
-        // Must be a top-level time-stamped line
-        // No regex lookbehind for iOS compatibility
-        const timeMatch = line.text.match(/^(\d{2}):(\d{2})\b/);
-        if (!timeMatch) {
+        // Must be a top-level timeline line.
+        if (!parseTimelineLine(line.text)) {
           return false;
         }
 

@@ -275,6 +275,111 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
     },
   });
 
+  // Convert the current timeline task line into a task note (instant)
+  plugin.addCommand({
+    id: "convert-line-to-task-note",
+    name: "Convert line to task note (instant)",
+    editorCallback: async (editor: Editor, ctx: MarkdownView | MarkdownFileInfo) => {
+      const cursor = editor.getCursor();
+      const line = editor.getLine(cursor.line);
+
+      const parsed = parseTimelineLine(line);
+      if (!parsed) {
+        new Notice("[Temporal Drift] Cursor is not on a timeline line.", 2500);
+        return;
+      }
+
+      const task = parseTaskHead(parsed.headRaw);
+      if (!task.isTask) {
+        new Notice("[Temporal Drift] Cursor is not on a task line.", 2500);
+        return;
+      }
+
+      // If the task already contains a wikilink, assume it's already converted.
+      if (/\[\[[^\]]+\]\]/.test(task.title)) {
+        new Notice("[Temporal Drift] Task already contains a link; skipping conversion.", 2500);
+        return;
+      }
+
+      const title = task.title || "Untitled";
+      const priority = task.priority ?? plugin.settings.defaultPriority;
+      const done = task.done;
+
+      const statusKey = plugin.settings.taskFieldStatus || "status";
+      const doneKey = plugin.settings.taskFieldDone || "done";
+      const priorityKey = plugin.settings.taskFieldPriority || "priority";
+      const createdKey = plugin.settings.taskFieldCreated || "created";
+      const sourceKey = plugin.settings.taskFieldSource || "td_source";
+      const sourceTimeKey = plugin.settings.taskFieldSourceTime || "td_source_time";
+
+      const created = new Date().toISOString().split("T")[0];
+
+      // Where the task was set (daily note + time)
+      const sourcePath = (ctx as any)?.file?.path ?? plugin.app.workspace.getActiveFile()?.path ?? "";
+      const sourceLinkTarget = sourcePath ? sourcePath.replace(/\.md$/i, "") : "";
+      const sourceLink = sourceLinkTarget ? `[[${sourceLinkTarget}]]` : "";
+      const sourceTime = parsed.timeText.split("–")[0]?.trim() || parsed.timeText;
+
+      const sanitize = (name: string): string => name.replace(/[\\/:*?"<>|]/g, "-").trim();
+      const baseName = sanitize(title).slice(0, 200) || "Untitled";
+
+      const tasksFolder = normalizePath(plugin.settings.tasksFolder || "Tasks");
+      let path = normalizePath(`${tasksFolder}/${baseName}.md`);
+
+      // Avoid collisions
+      if (plugin.app.vault.getAbstractFileByPath(path)) {
+        for (let i = 2; i < 200; i++) {
+          const candidate = normalizePath(`${tasksFolder}/${baseName}-${i}.md`);
+          if (!plugin.app.vault.getAbstractFileByPath(candidate)) {
+            path = candidate;
+            break;
+          }
+        }
+      }
+
+      const fmLines: string[] = [
+        "---",
+        `${statusKey}: ${done ? "done" : "open"}`,
+        `${doneKey}: ${done ? "true" : "false"}`,
+        `${priorityKey}: ${priority}`,
+        `${createdKey}: ${created}`,
+      ];
+
+      if (sourceLink) {
+        fmLines.push(`${sourceKey}: ${sourceLink}`);
+        fmLines.push(`${sourceTimeKey}: \"${sourceTime}\"`);
+      }
+
+      fmLines.push("---", "", `# ${title}`, "");
+
+      await plugin.app.vault.create(path, fmLines.join("\n"));
+
+      const taskTarget = path.replace(/\.md$/i, "");
+      const link = `[[${taskTarget}|${title}]]`;
+
+      const prioritySuffix = priority ? ` #${priority}` : "";
+
+      // Try to preserve suffix tokens (contexts/tags) after the title.
+      const checkboxRe = /^(\s*-?\s*)\[\s*([xX ]?)\s*\]\s*(.*)$/;
+      const m = parsed.headRaw.match(checkboxRe);
+      const rawRest = (m?.[3] ?? "").trim();
+      const cleanedRest = rawRest
+        .replace(/(?:^|\s)(?:#now|#next|#later|@now|@next|@later|\[now\]|\[next\]|\[later\]|\(now\)|\(next\)|\(later\))(?=\s|$)/gi, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      const suffix = cleanedRest.toLowerCase().startsWith(title.toLowerCase())
+        ? cleanedRest.slice(title.length).trim()
+        : "";
+
+      const nextHead = `${m?.[1] ?? ""}[${done ? "x" : " "}] ${link}${prioritySuffix}${suffix ? ` ${suffix}` : ""}`.trimEnd();
+      const nextLine = `${line.slice(0, parsed.headStart)}${nextHead}`;
+
+      editor.setLine(cursor.line, nextLine);
+      new Notice(`[Temporal Drift] Created task: ${path}`, 3000);
+    },
+  });
+
   // Migrate Tasks/ notes to canonical frontmatter schema
   plugin.addCommand({
     id: "migrate-task-schema",
@@ -296,15 +401,23 @@ export function registerCommands(plugin: TemporalDriftPlugin): void {
           const content = await plugin.app.vault.read(file);
           const cache = plugin.app.metadataCache.getFileCache(file);
           const fm = cache?.frontmatter as Record<string, unknown> | undefined;
-          const snapshot = parseTaskSnapshotFromContent(content, fm);
+          const snapshot = parseTaskSnapshotFromContent(content, fm, {
+            statusKey: plugin.settings.taskFieldStatus,
+            doneKey: plugin.settings.taskFieldDone,
+            priorityKey: plugin.settings.taskFieldPriority,
+          });
 
           const priority = snapshot.priority ?? plugin.settings.defaultPriority;
           const allocations = await computeAllocations(plugin, file);
 
           await plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
-            frontmatter.status = canonicalStatus({ ...snapshot, priority });
-            frontmatter.done = snapshot.done;
-            frontmatter.priority = priority;
+            const statusKey = plugin.settings.taskFieldStatus || "status";
+            const doneKey = plugin.settings.taskFieldDone || "done";
+            const priorityKey = plugin.settings.taskFieldPriority || "priority";
+
+            (frontmatter as any)[statusKey] = canonicalStatus({ ...snapshot, priority });
+            (frontmatter as any)[doneKey] = snapshot.done;
+            (frontmatter as any)[priorityKey] = priority;
 
             const existing = (frontmatter as any).allocations;
             if (Array.isArray(existing)) {

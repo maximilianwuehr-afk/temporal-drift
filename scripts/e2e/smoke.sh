@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VAULT_DIR="${TD_TEST_VAULT:-$ROOT_DIR/tests/fixtures/vault}"
 PLUGIN_ID="${TD_PLUGIN_ID:-temporal-drift}"
 PLUGIN_DIR="$VAULT_DIR/.obsidian/plugins/$PLUGIN_ID"
+THEME_NAME="${TD_THEME_NAME:-Temporal Drift}"
+THEME_SRC_DIR="$ROOT_DIR/themes/$THEME_NAME"
+THEME_DIR="$VAULT_DIR/.obsidian/themes/$THEME_NAME"
+APPEARANCE_FILE="$VAULT_DIR/.obsidian/appearance.json"
 REPORT_DIR="${TD_REPORT_DIR:-/tmp/temporal-drift-tests}"
 SMOKE_DIR="$REPORT_DIR/smoke"
 SMOKE_SHOT="$SMOKE_DIR/smoke-open.png"
@@ -36,6 +40,20 @@ fi
 cp "$ROOT_DIR/main.js" "$PLUGIN_DIR/main.js"
 cp "$ROOT_DIR/manifest.json" "$PLUGIN_DIR/manifest.json"
 cp "$ROOT_DIR/styles.css" "$PLUGIN_DIR/styles.css"
+
+if [[ -d "$THEME_SRC_DIR" ]]; then
+  mkdir -p "$THEME_DIR"
+  cp "$THEME_SRC_DIR/theme.css" "$THEME_DIR/theme.css"
+  cp "$THEME_SRC_DIR/manifest.json" "$THEME_DIR/manifest.json"
+
+  if [[ -f "$APPEARANCE_FILE" ]]; then
+    tmp="$(mktemp)"
+    jq --arg theme "$THEME_NAME" '.cssTheme = $theme' "$APPEARANCE_FILE" > "$tmp"
+    mv "$tmp" "$APPEARANCE_FILE"
+  else
+    printf '{\n  "cssTheme": "%s"\n}\n' "$THEME_NAME" > "$APPEARANCE_FILE"
+  fi
+fi
 
 # Ensure the newly copied plugin build is actually loaded.
 peekaboo app relaunch Obsidian --wait 1 --wait-until-ready --json >/dev/null

@@ -57,9 +57,11 @@ test("extractEventIdFromHead extracts id from path-based wikilink target", () =>
   assert.equal(extractEventIdFromHead(head), "abc_123@google.com");
 });
 
-test("replaceTimeToken patches only first HH:mm occurrence", () => {
+test("replaceTimeToken patches only first time token", () => {
   const line = "09:00 [[Weekly Sync ~abc123]] with [[Alice]]";
   assert.equal(replaceTimeToken(line, "09:30"), "09:30 [[Weekly Sync ~abc123]] with [[Alice]]");
+  const dotLine = "9.00 [[Weekly Sync ~abc123]] with [[Alice]]";
+  assert.equal(replaceTimeToken(dotLine, "09:30"), "09:30 [[Weekly Sync ~abc123]] with [[Alice]]");
 });
 
 test("extractUrlsFromText parses plain and markdown links", () => {
@@ -85,6 +87,7 @@ test("extractMeetingJoinUrl falls back to single unknown url", () => {
 
 test("minutesSinceMidnight parses valid hh:mm", () => {
   assert.equal(minutesSinceMidnight("09:30"), 570);
+  assert.equal(minutesSinceMidnight("9.30"), 570);
   assert.equal(minutesSinceMidnight("06:00–21:00"), 360);
   assert.equal(Number.isNaN(minutesSinceMidnight("bad")), true);
 });
@@ -92,6 +95,9 @@ test("minutesSinceMidnight parses valid hh:mm", () => {
 test("parseTimelineLine supports canonical and legacy formats", () => {
   assert.equal(parseTimelineLine("13:00 [[Standup]]")?.timeText, "13:00");
   assert.equal(parseTimelineLine("`13:00` — [[Standup]]")?.timeText, "13:00");
+  assert.equal(parseTimelineLine("9:30 [[Standup]]")?.timeText, "09:30");
+  assert.equal(parseTimelineLine("9.30 [[Standup]]")?.timeText, "09:30");
+  assert.equal(parseTimelineLine("9.30-10.15 — Sync")?.timeText, "09:30–10:15");
   assert.equal(parseTimelineLine("06:00–21:00 — Workday")?.timeText, "06:00–21:00");
   assert.equal(parseTimelineLine("09:00 - Something")?.head, "Something");
   assert.equal(isTimelineLine("not a timeline line"), false);

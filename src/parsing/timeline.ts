@@ -37,16 +37,32 @@ export interface ParsedTaskHead {
 // 2) `13:00` — [[Meeting]] with [[Person]]
 // 3) 06:00–21:00 — Description
 // 4) 09:00 — Description _(note)_
-const TIME_PLAIN_RE = /^(?:[-*+]\s+)?(\d{2}):(\d{2})\s+(.*)$/;
+// Also accepts single-digit hours and "." as separator (e.g., 9.30),
+// normalizing to HH:mm in parser output.
+const TIME_PLAIN_RE = /^(?:[-*+]\s+)?(\d{1,2}[:.]\d{2})\s+(.*)$/;
 const TIME_DASH_RE =
-  /^(?:[-*+]\s+)?`?(\d{2}:\d{2})(?:\s*[–-]\s*(\d{2}:\d{2}))?`?\s*[—–-]\s*(.*)$/;
+  /^(?:[-*+]\s+)?`?(\d{1,2}[:.]\d{2})(?:\s*[–-]\s*(\d{1,2}[:.]\d{2}))?`?\s*[—–-]\s*(.*)$/;
+
+function normalizeTimeToken(raw: string): string | null {
+  const m = raw.match(/^(\d{1,2})[:.](\d{2})$/);
+  if (!m) return null;
+
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 
 export function parseTimelineLine(text: string): ParsedTimelineLine | null {
   const dash = text.match(TIME_DASH_RE);
   if (dash) {
     const full = dash[0];
-    const start = dash[1];
-    const end = dash[2];
+    const start = normalizeTimeToken(dash[1] ?? "");
+    const end = dash[2] ? normalizeTimeToken(dash[2]) : null;
+    if (!start) return null;
+    if (dash[2] && !end) return null;
     const headRaw = dash[3] ?? "";
     const timeText = end ? `${start}–${end}` : start;
     const headStart = (dash.index ?? 0) + full.length - headRaw.length;
@@ -56,8 +72,9 @@ export function parseTimelineLine(text: string): ParsedTimelineLine | null {
   const plain = text.match(TIME_PLAIN_RE);
   if (plain) {
     const full = plain[0];
-    const timeText = `${plain[1]}:${plain[2]}`;
-    const headRaw = plain[3] ?? "";
+    const timeText = normalizeTimeToken(plain[1] ?? "");
+    if (!timeText) return null;
+    const headRaw = plain[2] ?? "";
     const headStart = (plain.index ?? 0) + full.length - headRaw.length;
     return { timeText, head: headRaw.trim(), headRaw, headStart };
   }
@@ -101,9 +118,11 @@ export function extractEventIdFromHead(head: string): string | null {
 }
 
 export function replaceTimeToken(line: string, nextTime: string): string {
-  const idx = line.search(/\d{2}:\d{2}/);
+  const idx = line.search(/\d{1,2}[:.]\d{2}/);
   if (idx < 0) return line;
-  return `${line.slice(0, idx)}${nextTime}${line.slice(idx + 5)}`;
+  const token = line.slice(idx).match(/^\d{1,2}[:.]\d{2}/)?.[0];
+  if (!token) return line;
+  return `${line.slice(0, idx)}${nextTime}${line.slice(idx + token.length)}`;
 }
 
 const URL_RE = /https?:\/\/[^\s<>"]+/gi;
@@ -235,9 +254,12 @@ export function parseTaskHead(head: string): ParsedTaskHead {
 
 export function minutesSinceMidnight(hhmm: string): number {
   // Accept single time and ranges (use start time for ranges)
-  const m = hhmm.match(/(\d{2}):(\d{2})/);
+  const m = hhmm.match(/(\d{1,2})[:.](\d{2})/);
   if (!m) return Number.NaN;
-  return Number(m[1]) * 60 + Number(m[2]);
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return Number.NaN;
+  return hh * 60 + mm;
 }
 
 export function parseDailyNoteTimeline(content: string): ParsedDailyTimeline {

@@ -38,11 +38,21 @@ function inferPriorityFromContent(content: string): TaskPriority {
 
 export function parseTaskSnapshotFromContent(
   content: string,
-  frontmatter?: Record<string, unknown>
+  frontmatter?: Record<string, unknown>,
+  fields?: {
+    statusKey?: string;
+    doneKey?: string;
+    priorityKey?: string;
+  }
 ): TaskSnapshot {
-  const fmStatus = typeof frontmatter?.status === "string" ? frontmatter.status.toLowerCase().trim() : "";
+  const statusKey = fields?.statusKey || "status";
+  const doneKey = fields?.doneKey || "done";
+  const priorityKey = fields?.priorityKey || "priority";
 
-  const fmDoneRaw = frontmatter?.done;
+  const fmStatusRaw = frontmatter?.[statusKey];
+  const fmStatus = typeof fmStatusRaw === "string" ? fmStatusRaw.toLowerCase().trim() : "";
+
+  const fmDoneRaw = frontmatter?.[doneKey];
   const fmDone =
     fmDoneRaw === true ||
     (typeof fmDoneRaw === "string" && ["true", "yes", "1"].includes(fmDoneRaw.toLowerCase()));
@@ -52,7 +62,7 @@ export function parseTaskSnapshotFromContent(
     ["done", "closed", "complete", "completed"].includes(fmStatus) ||
     inferDoneFromContent(content);
 
-  const fmPriority = parsePriority(frontmatter?.priority);
+  const fmPriority = parsePriority(frontmatter?.[priorityKey]);
   const priority = fmPriority ?? inferPriorityFromContent(content);
 
   return { done, priority };

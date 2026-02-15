@@ -261,6 +261,77 @@ export class TemporalDriftSettingTab extends PluginSettingTab {
           })
       );
 
+    new Setting(containerEl).setName("Task frontmatter field mapping (advanced)").setHeading();
+
+    const addField = (
+      name: string,
+      desc: string,
+      get: () => string,
+      set: (value: string) => void
+    ) => {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addText((text) =>
+          text
+            .setPlaceholder(get())
+            .setValue(get())
+            .onChange(async (value) => {
+              set(value.trim() || get());
+              await this.plugin.saveSettings();
+            })
+        );
+    };
+
+    addField(
+      "Status field",
+      "Frontmatter key for task status (default: status).",
+      () => this.plugin.settings.taskFieldStatus,
+      (v) => (this.plugin.settings.taskFieldStatus = v)
+    );
+
+    addField(
+      "Done field",
+      "Frontmatter key for task done boolean (default: done).",
+      () => this.plugin.settings.taskFieldDone,
+      (v) => (this.plugin.settings.taskFieldDone = v)
+    );
+
+    addField(
+      "Priority field",
+      "Frontmatter key for task priority (default: priority).",
+      () => this.plugin.settings.taskFieldPriority,
+      (v) => (this.plugin.settings.taskFieldPriority = v)
+    );
+
+    addField(
+      "Due field",
+      "Frontmatter key for task due date (default: due).",
+      () => this.plugin.settings.taskFieldDue,
+      (v) => (this.plugin.settings.taskFieldDue = v)
+    );
+
+    addField(
+      "Created field",
+      "Frontmatter key for task created date (default: created).",
+      () => this.plugin.settings.taskFieldCreated,
+      (v) => (this.plugin.settings.taskFieldCreated = v)
+    );
+
+    addField(
+      "Source link field",
+      "Frontmatter key for where the task was allocated (default: td_source).",
+      () => this.plugin.settings.taskFieldSource,
+      (v) => (this.plugin.settings.taskFieldSource = v)
+    );
+
+    addField(
+      "Source time field",
+      "Frontmatter key for the time within the source note (default: td_source_time).",
+      () => this.plugin.settings.taskFieldSourceTime,
+      (v) => (this.plugin.settings.taskFieldSourceTime = v)
+    );
+
     // Google Tasks section
     new Setting(containerEl).setName("Google Tasks Sync").setHeading();
 

@@ -27,6 +27,7 @@ interface SyncMeta {
 interface LocalTaskReconciliationOptions {
   app: App;
   getTasksFolder: () => string;
+  getTaskFieldKeys: () => { statusKey: string; doneKey: string; priorityKey: string };
   getFrontmatter: (file: TFile) => Record<string, any>;
   getLocalTaskMeta: (file: TFile) => TaskMeta;
   computeSyncStamp: (file: TFile, local?: TaskMeta) => number;
@@ -45,6 +46,7 @@ interface LocalTaskReconciliationOptions {
 export class LocalTaskReconciliation {
   private app: App;
   private getTasksFolder: () => string;
+  private getTaskFieldKeys: () => { statusKey: string; doneKey: string; priorityKey: string };
   private getFrontmatter: (file: TFile) => Record<string, any>;
   private getLocalTaskMeta: (file: TFile) => TaskMeta;
   private computeSyncStamp: (file: TFile, local?: TaskMeta) => number;
@@ -62,6 +64,7 @@ export class LocalTaskReconciliation {
   constructor(options: LocalTaskReconciliationOptions) {
     this.app = options.app;
     this.getTasksFolder = options.getTasksFolder;
+    this.getTaskFieldKeys = options.getTaskFieldKeys;
     this.getFrontmatter = options.getFrontmatter;
     this.getLocalTaskMeta = options.getLocalTaskMeta;
     this.computeSyncStamp = options.computeSyncStamp;
@@ -104,6 +107,8 @@ export class LocalTaskReconciliation {
       remote = next;
     }
 
+    const { statusKey, doneKey, priorityKey } = this.getTaskFieldKeys();
+
     // Update frontmatter only when it actually changes.
     const fm = this.getFrontmatter(file);
     const nextStatus = canonicalStatus(done);
@@ -111,15 +116,15 @@ export class LocalTaskReconciliation {
     const nextPriority = decoded.priority;
 
     const needsFrontmatterUpdate =
-      String(fm.status ?? "") !== nextStatus ||
-      Boolean(fm.done ?? false) !== nextDone ||
-      String(fm.priority ?? "") !== nextPriority;
+      String((fm as any)[statusKey] ?? "") !== nextStatus ||
+      Boolean((fm as any)[doneKey] ?? false) !== nextDone ||
+      String((fm as any)[priorityKey] ?? "") !== nextPriority;
 
     if (needsFrontmatterUpdate) {
       await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-        frontmatter.status = nextStatus;
-        (frontmatter as any).done = nextDone;
-        frontmatter.priority = nextPriority;
+        (frontmatter as any)[statusKey] = nextStatus;
+        (frontmatter as any)[doneKey] = nextDone;
+        (frontmatter as any)[priorityKey] = nextPriority;
       });
     }
 

@@ -64,6 +64,15 @@ export interface TemporalDriftSettings {
   googleTasksListId: string; // empty => use first list
   googleTasksAutoSyncMinutes: number; // 0 => manual only
 
+  // Task frontmatter field mapping (advanced)
+  taskFieldStatus: string;
+  taskFieldDone: string;
+  taskFieldPriority: string;
+  taskFieldDue: string;
+  taskFieldCreated: string;
+  taskFieldSource: string;
+  taskFieldSourceTime: string;
+
   // OpenClaw / Denethor automation (optional)
   openClawAutomationEnabled: boolean;
   openClawCommandsPath: string; // NDJSON command inbox
@@ -99,6 +108,14 @@ export const DEFAULT_SETTINGS: TemporalDriftSettings = {
   googleTasksToken: null,
   googleTasksListId: "",
   googleTasksAutoSyncMinutes: 5,
+
+  taskFieldStatus: "status",
+  taskFieldDone: "done",
+  taskFieldPriority: "priority",
+  taskFieldDue: "due",
+  taskFieldCreated: "created",
+  taskFieldSource: "td_source",
+  taskFieldSourceTime: "td_source_time",
 
   openClawAutomationEnabled: true,
   openClawCommandsPath: "Temporal Drift/commands.ndjson",

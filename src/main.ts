@@ -8,11 +8,10 @@ import { Extension } from "@codemirror/state";
 import { DEFAULT_SETTINGS, TemporalDriftSettings, GoogleTasksSyncStatus } from "./types";
 import { TemporalDriftSettingTab } from "./settings";
 import { TimelineExtension } from "./editor/timeline-extension";
-import { TimelineLivePreviewExtension } from "./editor/timeline-live-preview";
+import { TaskLinkOverlayExtension } from "./editor/task-link-overlay";
 import { AutoTimestampExtension } from "./editor/auto-timestamp";
 import { registerCommands } from "./commands";
 import { formatDate, formatTime } from "./utils/time";
-import { registerTimelinePostProcessor } from "./preview/timeline-postprocessor";
 import { registerOpenTrigger } from "./automation/open-trigger";
 import { DenethorBridge, registerDenethorBridge } from "./automation/denethor-bridge";
 import { TaskDropExtension } from "./editor/task-drop";
@@ -32,7 +31,7 @@ export default class TemporalDriftPlugin extends Plugin {
 
   private autoTimestamp: AutoTimestampExtension | null = null;
   private timeline: TimelineExtension | null = null;
-  private timelineLivePreview: TimelineLivePreviewExtension | null = null;
+  private taskLinkOverlay: TaskLinkOverlayExtension | null = null;
   private taskDrop: TaskDropExtension | null = null;
   private taskAllocationSync: TaskAllocationSync | null = null;
   private taskIndex: TaskIndexService | null = null;
@@ -58,7 +57,7 @@ export default class TemporalDriftPlugin extends Plugin {
 
     this.autoTimestamp = new AutoTimestampExtension(this.settings);
     this.timeline = new TimelineExtension(this.settings);
-    this.timelineLivePreview = new TimelineLivePreviewExtension(this.settings);
+    this.taskLinkOverlay = new TaskLinkOverlayExtension(this.app, this.settings);
     this.taskDrop = new TaskDropExtension(this.settings);
     this.taskAllocationSync = new TaskAllocationSync(this.app, this.settings);
 
@@ -85,9 +84,8 @@ export default class TemporalDriftPlugin extends Plugin {
 
     // Google OAuth handled via loopback server (PKCE)
 
-    // Markdown-first: all core UX lives in editor/preview extensions, no custom ItemView required.
+    // Markdown-first: keep the editor as the source of truth (no card widgets).
     this.registerEditorExtension(this.buildEditorExtensions());
-    registerTimelinePostProcessor(this);
 
     // External automation trigger file (vault-relative)
     registerOpenTrigger(this.app, { controlPath: "Temporal Drift/open.txt" });
@@ -215,12 +213,14 @@ export default class TemporalDriftPlugin extends Plugin {
       extensions.push(...this.timeline.getExtension());
     }
 
-    if (this.timelineLivePreview) {
-      extensions.push(...this.timelineLivePreview.getExtension());
-    }
+    // Live preview card widgets intentionally disabled (editor-first UX).
 
     if (this.autoTimestamp) {
       extensions.push(...this.autoTimestamp.getExtension());
+    }
+
+    if (this.taskLinkOverlay) {
+      extensions.push(...this.taskLinkOverlay.getExtension());
     }
 
     if (this.taskDrop) {
@@ -352,7 +352,7 @@ export default class TemporalDriftPlugin extends Plugin {
 
     this.autoTimestamp?.updateSettings(this.settings);
     this.timeline?.updateSettings(this.settings);
-    this.timelineLivePreview?.updateSettings(this.settings);
+    this.taskLinkOverlay?.updateSettings(this.settings);
     this.taskDrop?.updateSettings(this.settings);
     this.taskAllocationSync?.updateSettings(this.settings);
     this.taskIndex?.updateSettings(this.settings);
